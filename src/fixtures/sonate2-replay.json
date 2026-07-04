@@ -1,0 +1,143 @@
+{
+  "comment": "REPLAY FIXTURE — recorded/synthetic data for offline demo. Clearly labeled REPLAY in the UI; never presented as live measurements. TLE is checksum-valid and SONATE-2-like (SSO ~500km) for propagation demo purposes.",
+  "profile": {
+    "name": "SONATE-2 (REPLAY)",
+    "noradId": 59112,
+    "purpose": "Replay of public-style observation data for offline demo"
+  },
+  "tle": {
+    "line1": "1 59112U 24043AK  26166.50000000  .00012000  00000+0  55000-3 0  9992",
+    "line2": "2 59112  97.4500 245.5000 0011000  95.0000 265.2000 15.25000000123450",
+    "name": "SONATE-2 (REPLAY)",
+    "noradId": 59112,
+    "epoch": "2026-06-15T12:00:00.000Z"
+  },
+  "start": "2026-06-15T12:00:00.000Z",
+  "end": "2026-06-15T20:00:00.000Z",
+  "observations": [
+    {
+      "id": "fx-obs-1",
+      "stationName": "VK4XSS-UHF",
+      "start": "2026-06-15T12:24:00Z",
+      "end": "2026-06-15T12:33:00Z",
+      "frequencyHz": 437025000,
+      "transmitterMode": "GMSK",
+      "status": "good",
+      "url": null
+    },
+    {
+      "id": "fx-obs-2",
+      "stationName": "OE3XWJ-70cm",
+      "start": "2026-06-15T13:58:00Z",
+      "end": "2026-06-15T14:07:30Z",
+      "frequencyHz": 437025000,
+      "transmitterMode": "GMSK",
+      "status": "good",
+      "url": null
+    },
+    {
+      "id": "fx-obs-3",
+      "stationName": "JA6PL-430",
+      "start": "2026-06-15T15:31:00Z",
+      "end": "2026-06-15T15:39:00Z",
+      "frequencyHz": 437025000,
+      "transmitterMode": "GMSK",
+      "status": "failed",
+      "url": null
+    },
+    {
+      "id": "fx-obs-4",
+      "stationName": "KB9JHU-UHF",
+      "start": "2026-06-15T17:05:00Z",
+      "end": "2026-06-15T17:14:00Z",
+      "frequencyHz": 437025000,
+      "transmitterMode": "GMSK",
+      "status": "good",
+      "url": null
+    },
+    {
+      "id": "fx-obs-5",
+      "stationName": "SV1QVE-436",
+      "start": "2026-06-15T18:41:00Z",
+      "end": "2026-06-15T18:50:00Z",
+      "frequencyHz": 437025000,
+      "transmitterMode": "GMSK",
+      "status": "good",
+      "url": null
+    }
+  ],
+  "telemetryFrames": [
+    {
+      "timestamp": "2026-06-15T12:26:11Z",
+      "observer": "VK4XSS-UHF",
+      "decoderName": "sonate_2_fixture",
+      "frameHex": "86A2A6A840E0AE6C88646C86E103F0AB12057C1F00330081D2",
+      "decoded": {
+        "vbat": 7.86,
+        "ibat": 0.41,
+        "temp_obc": 17.9,
+        "temp_panel_xp": 24.6,
+        "cpu_load": 28,
+        "rssi_dbm": -97,
+        "mem_used_pct": 41.2,
+        "uptime_s": 7154032,
+        "adcs_mode": "SUNPOINT",
+        "beacon_count": 91245
+      }
+    },
+    {
+      "timestamp": "2026-06-15T14:01:42Z",
+      "observer": "OE3XWJ-70cm",
+      "decoderName": "sonate_2_fixture",
+      "frameHex": "86A2A6A840E0AE6C88646C86E103F0AB12057D2000340082F1",
+      "decoded": {
+        "vbat": 7.61,
+        "ibat": -0.22,
+        "temp_obc": 12.4,
+        "temp_panel_xp": -8.3,
+        "cpu_load": 33,
+        "rssi_dbm": -101,
+        "mem_used_pct": 41.3,
+        "uptime_s": 7159763,
+        "adcs_mode": "NADIR",
+        "beacon_count": 91312
+      }
+    },
+    {
+      "timestamp": "2026-06-15T17:08:05Z",
+      "observer": "KB9JHU-UHF",
+      "decoderName": "sonate_2_fixture",
+      "frameHex": "86A2A6A840E0AE6C88646C86E103F0AB12057E210035008310",
+      "decoded": {
+        "vbat": 7.92,
+        "ibat": 0.55,
+        "temp_obc": 19.6,
+        "temp_panel_xp": 31.0,
+        "cpu_load": 26,
+        "rssi_dbm": -94,
+        "mem_used_pct": 41.3,
+        "uptime_s": 7170946,
+        "adcs_mode": "SUNPOINT",
+        "beacon_count": 91457
+      }
+    },
+    {
+      "timestamp": "2026-06-15T18:44:39Z",
+      "observer": "SV1QVE-436",
+      "decoderName": "sonate_2_fixture",
+      "frameHex": "86A2A6A840E0AE6C88646C86E103F0AB12057F220036008422",
+      "decoded": {
+        "vbat": 7.55,
+        "ibat": -0.31,
+        "temp_obc": 10.8,
+        "temp_panel_xp": -12.7,
+        "cpu_load": 35,
+        "rssi_dbm": -103,
+        "mem_used_pct": 41.4,
+        "uptime_s": 7176740,
+        "adcs_mode": "NADIR",
+        "beacon_count": 91530
+      }
+    }
+  ]
+}
