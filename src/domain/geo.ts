@@ -39,3 +39,25 @@ export function destPoint(p: LatLon, brgDeg: number, dKm: number): LatLon {
     Math.atan2(Math.sin(th) * Math.sin(dl) * Math.cos(p1), Math.cos(dl) - Math.sin(p1) * Math.sin(p2));
   return { lat: r2d(p2), lon: wrapLon(r2d(l2)) };
 }
+
+/**
+ * Half-angle (degrees) of the cone from Earth's center to the horizon as
+ * seen from a satellite at altitude `altKm` — i.e. the angular radius of
+ * the satellite's visibility footprint, `acos(Re / (Re + h))`.
+ * This is a purely geometric line-of-sight horizon (assumes a spherical
+ * Earth and a 0° minimum elevation); it is not a ground-station-specific
+ * elevation-mask calculation.
+ */
+export function footprintHalfAngleDeg(altKm: number): number {
+  return r2d(Math.acos(R_EARTH_KM / (R_EARTH_KM + altKm)));
+}
+
+/** Polygon approximating the satellite's visibility footprint circle on the ground. */
+export function footprintCircle(center: LatLon, altKm: number, steps = 72): LatLon[] {
+  const radiusKm = d2r(footprintHalfAngleDeg(altKm)) * R_EARTH_KM;
+  const pts: LatLon[] = [];
+  for (let i = 0; i <= steps; i++) {
+    pts.push(destPoint(center, (360 / steps) * i, radiusKm));
+  }
+  return pts;
+}

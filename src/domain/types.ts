@@ -59,8 +59,12 @@ export interface OrbitState {
   tle: TleSet | null;
   tleAgeHours: number | null;
   position: OrbitPosition | null;
-  /** Future ground track (already sampled) */
+  /** Ground track samples spanning [trackStartMs, trackStartMs + (track.length-1)*trackStepS*1000]. */
   track: GeoPoint[];
+  /** Unix ms timestamp of track[0], or null when track is empty. */
+  trackStartMs: number | null;
+  /** Sampling interval (seconds) between consecutive track points, or null when track is empty. */
+  trackStepS: number | null;
   error: string | null;
 }
 

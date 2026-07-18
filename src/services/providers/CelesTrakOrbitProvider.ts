@@ -35,7 +35,8 @@ export class CelesTrakOrbitProvider implements SatelliteDataProvider {
   private lastSuccessAt: string | null = null;
   private wasStaleCache = false;
 
-  private trackCache: { atMs: number; points: { lat: number; lon: number }[] } | null = null;
+  private trackCache: { atMs: number; startMs: number; stepS: number; points: { lat: number; lon: number }[] } | null =
+    null;
   private passCache: { atMs: number; stationsKey: string; epoch: string; passes: PassPrediction[] } | null = null;
 
   constructor(
@@ -89,6 +90,8 @@ export class CelesTrakOrbitProvider implements SatelliteDataProvider {
         tleAgeHours: null,
         position: null,
         track: [],
+        trackStartMs: null,
+        trackStepS: null,
         error: this.lastError ?? "orbit data not loaded yet",
       };
     }
@@ -98,9 +101,15 @@ export class CelesTrakOrbitProvider implements SatelliteDataProvider {
 
     if (!this.trackCache || now.getTime() - this.trackCache.atMs > TRACK_CACHE_MS) {
       const periodS = this.engine.periodMinutes() * 60;
+      const stepS = 45;
+      // Sample one orbital period into the past (for the "past track" map
+      // overlay) plus two periods into the future, as before.
+      const startMs = now.getTime() - periodS * 1000;
       this.trackCache = {
         atMs: now.getTime(),
-        points: this.engine.groundTrack(now, periodS * 2, 45),
+        startMs,
+        stepS,
+        points: this.engine.groundTrack(new Date(startMs), periodS * 3, stepS),
       };
     }
 
@@ -120,6 +129,8 @@ export class CelesTrakOrbitProvider implements SatelliteDataProvider {
       tleAgeHours: ageHours(r.epoch, now),
       position,
       track: this.trackCache.points,
+      trackStartMs: this.trackCache.startMs,
+      trackStepS: this.trackCache.stepS,
       error: this.lastError,
     };
   }

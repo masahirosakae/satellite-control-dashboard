@@ -73,8 +73,8 @@
 
     ![Provider health](docs/screenshots/provider-health.png)
 - **REPLAY**: `src/fixtures/sonate2-replay.json` に記録された固定の観測・テレメトリ・TLEを、再生/一時停止/倍速切り替え付きで再生(`src/services/providers/ReplayProvider.ts`)
-- **共通**: 地上局のCRUD(`GroundStationEditor`、`localStorage` 永続化、既定局は公開の実在施設4箇所(Uchinoura/Svalbard/Santiago/Fairbanks)のみでユーザー個人情報は初期値に含まない)、イベントログ(`EventLog`)、各パネルのprovenance/freshnessチップ表示、世界地図上の地上軌跡表示(`WorldMap`)
-- **テスト**: `tests/` に vitest による自動テスト10ファイル・57テスト(TLE正規化 / SGP4ラッパー / パス予測・仰角マスク / 鮮度判定 / テレメトリフィールドマッピング / コマンドリハーサルが外部送信しないことの安全性テスト / Replay fixture / モード切替の非フォールバック / BFF orbitルート(成功・障害・STALEキャッシュ) / BFF SatNOGSルート(トークン欠如・データなし・API失敗・トークン非漏洩))。すべて実ネットワークに接続せず、注入したフェイク `fetch` で実行
+- **共通**: 地上局のCRUD(`GroundStationEditor`、`localStorage` 永続化、既定局は公開の実在施設4箇所(Uchinoura/Svalbard/Santiago/Fairbanks)のみでユーザー個人情報は初期値に含まない)、イベントログ(`EventLog`)、各パネルのprovenance/freshnessチップ表示、世界地図表示(`WorldMap` — Natural Earth由来の海岸線、昼夜ターミネータ、可視フットプリント円、過去実線/未来破線の地上軌跡)
+- **テスト**: `tests/` に vitest による自動テスト12ファイル・73テスト(TLE正規化 / SGP4ラッパー / パス予測・仰角マスク / 鮮度判定 / テレメトリフィールドマッピング / コマンドリハーサルが外部送信しないことの安全性テスト / Replay fixture / モード切替の非フォールバック / BFF orbitルート(成功・障害・STALEキャッシュ) / BFF SatNOGSルート(トークン欠如・データなし・API失敗・トークン非漏洩) / 球面幾何・フットプリント / 昼夜ターミネータ)。すべて実ネットワークに接続せず、注入したフェイク `fetch` で実行
 
 ## 明示的に実装していない機能(禁止範囲を含む)
 
@@ -140,7 +140,7 @@ flowchart LR
 │   ├── clients/          # celestrak.ts, satnogs.ts (上流API呼び出し)
 │   ├── config.ts, cache.ts, app.ts, index.ts
 ├── shared/               # apiTypes.ts, tle.ts — クライアント/サーバー共有DTO
-├── tests/                # vitest (10ファイル, 57テスト)
+├── tests/                # vitest (12ファイル, 73テスト)
 ├── legacy/               # satellite-mission-control.jsx — プロジェクトの原型(単一ファイルMVP)
 └── docs/
     ├── architecture.md
@@ -194,7 +194,7 @@ npm run typecheck
 npm test
 ```
 
-`tests/` 配下のvitestスイート(10ファイル・57テスト、すべて実ネットワーク非依存)には、以下のような安全性テストが含まれます。
+`tests/` 配下のvitestスイート(12ファイル・73テスト、すべて実ネットワーク非依存)には、以下のような安全性テストが含まれます。
 
 - `tests/rehearsal.test.ts` — リハーサルコマンドが `fetch` を一切呼び出さないことの検証
 - `tests/server.satnogs.test.ts` — SatNOGS APIトークンがレスポンスに一切含まれないことの検証

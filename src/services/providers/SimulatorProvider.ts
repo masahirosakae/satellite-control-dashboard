@@ -51,8 +51,12 @@ export class SimulatorProvider implements SatelliteDataProvider {
   getOrbitState(): OrbitState {
     const t = this.sim.simT;
     const pos = simSatPosition(t);
+    const stepS = 45;
     const track: { lat: number; lon: number }[] = [];
-    for (let dt = 0; dt <= SIM_ORBIT_PERIOD_S * 2; dt += 45) {
+    // One simulated orbital period into the past (for the "past track" map
+    // overlay) plus two periods into the future, matching the live/replay
+    // providers' sampling window.
+    for (let dt = -SIM_ORBIT_PERIOD_S; dt <= SIM_ORBIT_PERIOD_S * 2; dt += stepS) {
       track.push(simSatPosition(t + dt));
     }
     return {
@@ -61,6 +65,8 @@ export class SimulatorProvider implements SatelliteDataProvider {
       tleAgeHours: null,
       position: { ...pos, altKm: 410, velocityKmS: 7.66 },
       track,
+      trackStartMs: simDate(t - SIM_ORBIT_PERIOD_S).getTime(),
+      trackStepS: stepS,
       error: null,
     };
   }

@@ -29,6 +29,16 @@ export default function App() {
   const passes = store.getPassPredictions();
   const health = store.getProviderHealth();
   const nowMs = store.displayNow.getTime();
+
+  const { trackPast, trackFuture } = (() => {
+    const { track, trackStartMs, trackStepS } = orbit;
+    if (trackStartMs === null || trackStepS === null || track.length === 0) {
+      return { trackPast: [], trackFuture: [] };
+    }
+    const splitIndex = Math.round((nowMs - trackStartMs) / (trackStepS * 1000));
+    const clamped = Math.max(0, Math.min(track.length, splitIndex));
+    return { trackPast: track.slice(0, clamped), trackFuture: track.slice(clamped) };
+  })();
   const snap = store.sim.snapshotCache;
   const looks = isSim ? [] : store.getStationLooks();
   const visibleCount = looks.filter((l) => l.visible).length;
@@ -104,12 +114,14 @@ export default function App() {
         >
           <WorldMap
             position={orbit.position}
-            track={orbit.track}
+            trackPast={trackPast}
+            trackFuture={trackFuture}
             stations={mapStations}
             label={store.profile.name}
             subLabel={mapSub}
             inLink={linkOn}
             trackCacheKey={Math.floor(nowMs / 20000)}
+            now={store.displayNow}
           />
         </Panel>
 

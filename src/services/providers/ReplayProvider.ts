@@ -56,7 +56,8 @@ export class ReplayProvider implements SatelliteDataProvider {
   readonly endMs: number;
   private engine: Sgp4OrbitEngine | null;
   private initError: string | null = null;
-  private trackCache: { atMs: number; points: { lat: number; lon: number }[] } | null = null;
+  private trackCache: { atMs: number; startMs: number; stepS: number; points: { lat: number; lon: number }[] } | null =
+    null;
   private passCache: { key: string; passes: PassPrediction[] } | null = null;
 
   constructor(private fixture: ReplayFixture) {
@@ -100,12 +101,21 @@ export class ReplayProvider implements SatelliteDataProvider {
         tleAgeHours: null,
         position: null,
         track: [],
+        trackStartMs: null,
+        trackStepS: null,
         error: this.initError,
       };
     }
     if (!this.trackCache || Math.abs(now.getTime() - this.trackCache.atMs) > TRACK_CACHE_MS) {
       const periodS = this.engine.periodMinutes() * 60;
-      this.trackCache = { atMs: now.getTime(), points: this.engine.groundTrack(now, periodS * 2, 45) };
+      const stepS = 45;
+      const startMs = now.getTime() - periodS * 1000;
+      this.trackCache = {
+        atMs: now.getTime(),
+        startMs,
+        stepS,
+        points: this.engine.groundTrack(new Date(startMs), periodS * 3, stepS),
+      };
     }
     return {
       provenance: this.provenance(this.fixture.tle.epoch, true),
@@ -113,6 +123,8 @@ export class ReplayProvider implements SatelliteDataProvider {
       tleAgeHours: ageHours(this.fixture.tle.epoch, now),
       position: this.engine.positionAt(now),
       track: this.trackCache.points,
+      trackStartMs: this.trackCache.startMs,
+      trackStepS: this.trackCache.stepS,
       error: null,
     };
   }
