@@ -5,16 +5,34 @@
  */
 import { useEffect, useState } from "react";
 import { COMMANDS } from "../../domain/commandRehearsal";
+import type { RehearsalStatus } from "../../domain/types";
 import { C, MONO, LBL, fmtIso } from "../layout/theme";
 import type { MissionStore } from "../../store/missionStore";
+
+const STATUS_COLOR: Record<RehearsalStatus, string> = {
+  CREATED: C.dim,
+  REHEARSAL_ACK: C.cyan,
+  REHEARSAL_EXEC: C.green,
+  REHEARSAL_FAIL: C.red,
+};
 
 export function RehearsalConsole({ store }: { store: MissionStore }) {
   const [cmd, setCmd] = useState(COMMANDS[0].name);
   const [param, setParam] = useState("");
+  const [armed, setArmed] = useState(false);
   const def = COMMANDS.find((c) => c.name === cmd);
   useEffect(() => {
     setParam(def?.param ? def.param.default : "");
   }, [cmd, def]);
+
+  const handleCmdChange = (name: string) => {
+    setCmd(name);
+    setArmed(false);
+  };
+  const handleParamChange = (value: string) => {
+    setParam(value);
+    setArmed(false);
+  };
 
   return (
     <div className="p-2 h-full flex flex-col gap-2 overflow-hidden">
@@ -30,7 +48,7 @@ export function RehearsalConsole({ store }: { store: MissionStore }) {
           <span style={LBL}>COMMAND</span>
           <select
             value={cmd}
-            onChange={(e) => setCmd(e.target.value)}
+            onChange={(e) => handleCmdChange(e.target.value)}
             className="rounded outline-none"
             style={{ background: "#050a13", border: "1px solid " + C.line, color: C.text, fontFamily: MONO, fontSize: 11, padding: "4px 8px" }}
           >
@@ -44,23 +62,45 @@ export function RehearsalConsole({ store }: { store: MissionStore }) {
             <span style={LBL}>{def.param.label}</span>
             <input
               value={param}
-              onChange={(e) => setParam(e.target.value)}
+              onChange={(e) => handleParamChange(e.target.value)}
               className="rounded w-28 outline-none"
               style={{ background: "#050a13", border: "1px solid " + C.line, color: C.amber, fontFamily: MONO, fontSize: 11, padding: "4px 8px" }}
             />
           </div>
         )}
         <button
-          onClick={() => store.createRehearsal(cmd, def?.param ? param : null)}
+          onClick={() => setArmed(true)}
           className="rounded"
           style={{
             fontSize: 11,
             fontWeight: 800,
             letterSpacing: "0.14em",
             padding: "5px 16px",
-            background: "rgba(139,123,244,0.18)",
-            color: C.violet,
-            border: "1px solid " + C.violet,
+            background: armed ? "rgba(245,176,74,0.18)" : "#0e1729",
+            color: armed ? C.amber : C.dim,
+            border: "1px solid " + (armed ? C.amber : C.line),
+            cursor: "pointer",
+          }}
+        >
+          {armed ? "ARMED — READY" : "ARM REHEARSAL"}
+        </button>
+        <button
+          onClick={() => {
+            if (!armed) return;
+            store.createRehearsal(cmd, def?.param ? param : null);
+            setArmed(false);
+          }}
+          disabled={!armed}
+          className="rounded"
+          style={{
+            fontSize: 11,
+            fontWeight: 800,
+            letterSpacing: "0.14em",
+            padding: "5px 16px",
+            background: armed ? "rgba(139,123,244,0.18)" : "#0e1729",
+            color: armed ? C.violet : C.dim,
+            border: "1px solid " + (armed ? C.violet : C.line),
+            cursor: armed ? "pointer" : "default",
           }}
         >
           SIMULATE COMMAND ◇
@@ -91,7 +131,12 @@ export function RehearsalConsole({ store }: { store: MissionStore }) {
                 <td style={{ padding: "3px 8px" }}>{fmtIso(r.createdAt)}</td>
                 <td style={{ padding: "3px 8px" }}>{r.name}</td>
                 <td style={{ padding: "3px 8px", color: C.amber }}>{r.param || "—"}</td>
-                <td style={{ padding: "3px 8px", fontWeight: 700, color: C.dim }}>NOT TRANSMITTED</td>
+                <td style={{ padding: "3px 8px", fontWeight: 700, color: STATUS_COLOR[r.status] }}>
+                  {r.status + " · NOT TRANSMITTED"}
+                  {r.status === "REHEARSAL_FAIL" && r.failReason && (
+                    <div style={{ fontWeight: 400, color: C.dim, marginTop: 2 }}>{r.failReason}</div>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>

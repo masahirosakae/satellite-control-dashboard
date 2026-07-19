@@ -151,6 +151,14 @@ export interface TelemetrySeries {
 }
 
 /**
+ * Rehearsal lifecycle: CREATED -> REHEARSAL_ACK -> REHEARSAL_EXEC | REHEARSAL_FAIL.
+ * All transitions are wall-clock-driven simulation only — see
+ * domain/commandRehearsal.ts. No state here ever corresponds to a real
+ * uplink or spacecraft acknowledgement.
+ */
+export type RehearsalStatus = "CREATED" | "REHEARSAL_ACK" | "REHEARSAL_EXEC" | "REHEARSAL_FAIL";
+
+/**
  * A command rehearsal entry. `transmitted` is typed as literal `false`:
  * this application NEVER transmits commands to a real spacecraft.
  */
@@ -162,6 +170,8 @@ export interface CommandRehearsal {
   mode: MissionMode;
   transmitted: false;
   note: string;
+  status: RehearsalStatus;
+  failReason: string | null;
 }
 
 export type ProviderStatus = "OK" | "DEGRADED" | "ERROR" | "TOKEN_MISSING" | "IDLE";

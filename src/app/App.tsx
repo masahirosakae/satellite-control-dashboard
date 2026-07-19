@@ -15,6 +15,7 @@ import { ObservationBrowser } from "../components/mission/ObservationBrowser";
 import { ProviderHealthPanel } from "../components/mission/ProviderHealthPanel";
 import { GroundStationEditor } from "../components/mission/GroundStationEditor";
 import { OperationsChecklist } from "../components/mission/OperationsChecklist";
+import { AdvisoryPanel } from "../components/mission/AdvisoryPanel";
 import { SIM_COMM_RANGE_KM } from "../domain/simpleOrbit";
 import { buildOpsChecklist } from "../domain/opsChecklist";
 import { simDate } from "../services/simulator/Simulator";
@@ -33,6 +34,7 @@ export default function App() {
   const nowMs = store.displayNow.getTime();
   const netWindows = store.getNetWindows();
   const contactPhase = store.getContactPhase();
+  const advisories = store.getAdvisories();
   const checklist = buildOpsChecklist({
     orbit,
     telemetry,
@@ -175,14 +177,20 @@ export default function App() {
           {isSim ? <CommandPanel store={store} inLink={snap.inLink} /> : <RehearsalConsole store={store} />}
         </Panel>
 
-        <Panel
-          title="EVENT LOG"
-          className="lg:col-span-3"
-          style={{ height: 440 }}
-          right={<span style={{ fontSize: 9, color: C.dim, fontFamily: MONO }}>{logEntries.length} EVENTS</span>}
-        >
-          <EventLog entries={logEntries} />
-        </Panel>
+        <div className="lg:col-span-3 grid gap-2" style={{ height: 440, gridTemplateRows: "150px 1fr" }}>
+          <Panel
+            title="ADVISORIES"
+            right={<span style={{ fontSize: 9, color: C.dim, fontFamily: MONO }}>{advisories.active.length} ACTIVE</span>}
+          >
+            <AdvisoryPanel active={advisories.active} acked={advisories.acked} onAck={(id) => store.ackAdvisory(id)} />
+          </Panel>
+          <Panel
+            title="EVENT LOG"
+            right={<span style={{ fontSize: 9, color: C.dim, fontFamily: MONO }}>{logEntries.length} EVENTS</span>}
+          >
+            <EventLog entries={logEntries} />
+          </Panel>
+        </div>
 
         <Panel title="PROVIDER HEALTH" className="lg:col-span-4" style={{ height: 240 }}>
           <ProviderHealthPanel health={health} />

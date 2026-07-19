@@ -20,9 +20,10 @@ import type {
   SatelliteProfile,
   TelemetrySnapshot,
 } from "../domain/types";
-import { createCommandRehearsal } from "../domain/commandRehearsal";
+import { createCommandRehearsal, rehearsalTransition } from "../domain/commandRehearsal";
 import { mergeNetWindows, type NetWindow, type PassInterval } from "../domain/netWindow";
 import { contactPhaseAt, type ContactPhaseInfo } from "../domain/contactPhase";
+import { deriveAdvisories, reconcileAcks, type Advisory } from "../domain/advisory";
 import { Simulator, simDate } from "../services/simulator/Simulator";
 import { MissionApi } from "../services/api/missionApi";
 import { SimulatorProvider } from "../services/providers/SimulatorProvider";
@@ -69,6 +70,8 @@ export class MissionStore {
   private lastOrbitRefresh = 0;
   private lastSatnogsRefresh = 0;
   private refreshing = false;
+  private ackedAdvisoryIds = new Set<string>();
+  private rehearsalRolls = new Map<string, number>();
 
   constructor(private api: MissionApi = new MissionApi()) {
     this.stations = loadStations();
@@ -119,7 +122,28 @@ export class MissionStore {
     } else if (this.mode === "LIVE_READ_ONLY") {
       void this.refreshLiveIfDue();
     }
+    this.tickRehearsals();
     this.notify();
+  }
+
+  /**
+   * Advance the rehearsal lifecycle (CREATED -> REHEARSAL_ACK ->
+   * REHEARSAL_EXEC | REHEARSAL_FAIL) for every non-terminal rehearsal,
+   * driven purely by wall-clock elapsed time — runs in all modes, since
+   * rehearsals are wall-clock artifacts independent of the mission clock.
+   */
+  private tickRehearsals(): void {
+    if (this.rehearsals.length === 0) return;
+    const nowMs = Date.now();
+    this.rehearsals = this.rehearsals.map((r) => {
+      if (r.status !== "CREATED" && r.status !== "REHEARSAL_ACK") return r;
+      const elapsedMs = nowMs - Date.parse(r.createdAt);
+      const roll = this.rehearsalRolls.get(r.id) ?? 0;
+      const transition = rehearsalTransition(r.status, elapsedMs, roll, r.id);
+      if (!transition) return r;
+      this.logEvent(transition.status === "REHEARSAL_FAIL" ? "WARN" : "INFO", "RHRSL", transition.logMessage);
+      return { ...r, status: transition.status, failReason: transition.failReason };
+    });
   }
 
   private async refreshLiveIfDue(): Promise<void> {
@@ -227,6 +251,24 @@ export class MissionStore {
     ];
   }
 
+  getAdvisories(): { active: Advisory[]; acked: Advisory[] } {
+    const advisories = deriveAdvisories({
+      orbit: this.getOrbitState(),
+      telemetry: this.getTelemetry(),
+      health: this.getProviderHealth(),
+    });
+    this.ackedAdvisoryIds = reconcileAcks(this.ackedAdvisoryIds, advisories.map((a) => a.id));
+    const active = advisories.filter((a) => !this.ackedAdvisoryIds.has(a.id));
+    const acked = advisories.filter((a) => this.ackedAdvisoryIds.has(a.id));
+    return { active, acked };
+  }
+
+  ackAdvisory(id: string): void {
+    this.ackedAdvisoryIds.add(id);
+    this.logEvent("INFO", "ADVSY", "advisory acknowledged: " + id);
+    this.notify();
+  }
+
   /* ---------- commands ---------- */
 
   /** SIMULATED mode: virtual uplink to the simulator. */
@@ -247,8 +289,12 @@ export class MissionStore {
       this.mode,
       new Date()
     );
+    this.rehearsalRolls.set(rehearsal.id, Math.random());
     this.rehearsals.unshift(rehearsal);
-    if (this.rehearsals.length > 50) this.rehearsals.pop();
+    if (this.rehearsals.length > 50) {
+      const dropped = this.rehearsals.pop();
+      if (dropped) this.rehearsalRolls.delete(dropped.id);
+    }
     this.logEvent("INFO", "RHRSL", "rehearsal command created — " + logMessage);
     this.notify();
     return rehearsal;
