@@ -53,6 +53,19 @@ function collectFiles(): FileInfo[] {
       ) {
         imports.push(node.moduleSpecifier.text);
       }
+      // Dynamic import("...") and require("...") calls — both are ways to
+      // reach another module that a static ImportDeclaration/ExportDeclaration
+      // scan alone would miss. Rules 1/3/4 rely on `imports` being complete.
+      if (ts.isCallExpression(node)) {
+        const isDynamicImport = node.expression.kind === ts.SyntaxKind.ImportKeyword;
+        const isRequireCall = ts.isIdentifier(node.expression) && node.expression.text === "require";
+        if (isDynamicImport || isRequireCall) {
+          const arg = node.arguments[0];
+          if (arg && ts.isStringLiteral(arg)) {
+            imports.push(arg.text);
+          }
+        }
+      }
       if (ts.isIdentifier(node)) {
         identifiers.add(node.text);
       }
@@ -82,6 +95,14 @@ describe("Control Plane architecture boundaries", () => {
     expect(controlFiles.length).toBeGreaterThanOrEqual(2);
   });
 
+  it("collector sanity check: a known file with a real import is not silently collected as importing nothing", () => {
+    // Guards against the AST visitor regressing to a no-op (e.g. a typo'd
+    // ts.is* predicate) that would make every rule below vacuously pass.
+    const known = files.find((f) => f.relPath === "src/services/control/DisabledControlPlane.ts");
+    expect(known).toBeDefined();
+    expect(known!.imports.length).toBeGreaterThanOrEqual(1);
+  });
+
   it("rule 1: files under src/services/control/ import nothing outside src/services/control/ and src/domain/ types", () => {
     const violations: string[] = [];
     for (const f of controlFiles) {
@@ -108,8 +129,8 @@ describe("Control Plane architecture boundaries", () => {
     expect(violations, `Forbidden imports found:\n${violations.join("\n")}`).toEqual([]);
   });
 
-  it("rule 2: no file under src/services/control/ contains fetch, XMLHttpRequest, WebSocket, sendBeacon, EventSource, or WebTransport identifiers", () => {
-    const forbiddenIds = ["fetch", "XMLHttpRequest", "WebSocket", "sendBeacon", "EventSource", "WebTransport"];
+  it("rule 2: no file under src/services/control/ contains fetch, XMLHttpRequest, WebSocket, sendBeacon, EventSource, WebTransport, or require identifiers", () => {
+    const forbiddenIds = ["fetch", "XMLHttpRequest", "WebSocket", "sendBeacon", "EventSource", "WebTransport", "require"];
     const violations: string[] = [];
     for (const f of controlFiles) {
       for (const id of forbiddenIds) {

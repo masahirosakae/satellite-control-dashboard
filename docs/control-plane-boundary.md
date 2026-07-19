@@ -110,12 +110,14 @@ UI側の表示は表示専用の `ControlPlaneStatusChip`(`src/components/layout
 この境界は慣習ではなく構造として強制されており、TypeScript ASTベースのテストスイート `tests/architecture.test.ts` によって検証されます。このテストは `typescript` コンパイラAPIで `src/**/*.ts(x)` を全ファイルパースし、import文と識別子を検査します。
 
 1. `src/services/control/` 配下のファイルは、`src/services/control/` と `src/domain/` の外を一切importしない — 具体的には `src/services/providers/`、`src/services/api/`、`src/store/`、`src/domain/commandRehearsal.ts` を決してimportしない。
-2. `src/services/control/` 配下のどのファイルも、識別子 `fetch` / `XMLHttpRequest` / `WebSocket` / `sendBeacon` / `EventSource` / `WebTransport` を含まない。
+2. `src/services/control/` 配下のどのファイルも、識別子 `fetch` / `XMLHttpRequest` / `WebSocket` / `sendBeacon` / `EventSource` / `WebTransport` / `require` を含まない。
 3. `src/domain/commandRehearsal.ts` と `src/components/command/` 配下のすべてのファイルは、`src/services/control/` を決してimportしない。
 4. `src/services/providers/` と `src/services/api/` は、`src/services/control/` を決してimportしない。
 5. `src/` 配下のどのファイルも `process.env` にアクセスせず、`SATNOGS_API_TOKEN` という厳密なリテラルを識別子・文字列として参照しない(「set SATNOGS_API_TOKEN on the server」のように、長い文章の中で単に環境変数名に**言及するだけ**の運用者向けコピーは秘密情報の参照ではなく許可される)。
 
-唯一許可されており、かつ意図的なimportは `src/store/` → `src/services/control/` です: `MissionStore` がdisabledアダプタを構築し、読み取り専用の `store.controlPlane` として公開します。これらのテストが禁止しているのは逆方向(controlがstore・providers・api・rehearsalコードをimportすること)です。
+インポート検出は静的な `import` / `export ... from` 文だけでなく、動的な `import("...")` 呼び出しと `require("...")` 呼び出しも対象にしており(ルール1・3・4はこれらも自動的にカバーする)、ルール2は制御系ファイル内の `require` 識別子そのものも禁止識別子として扱う。
+
+`src/store/` → `src/services/control/` は、アダプタを**実際に構築する唯一のランタイムimport**です: `MissionStore` がdisabledアダプタを構築し、読み取り専用の `store.controlPlane` として公開します。これとは別に、`src/components/layout/ControlPlaneStatusChip.tsx` のような表示コンポーネントは `ControlPlaneStatus` 等の**型のみ**を `import type` で参照できます — 型のみのimportはビルド時に消去されるため、実行時に到達可能なコードパスを増やすものではありません。これらのテストが禁止しているのは逆方向(controlがstore・providers・api・rehearsalコードをimportすること)です。
 
 ## 将来の実Control Planeに必要な10要件
 
