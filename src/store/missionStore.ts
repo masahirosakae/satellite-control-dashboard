@@ -25,7 +25,9 @@ import type {
 import { advanceRehearsal, assertNotTransmitted, createCommandRehearsal } from "../domain/commandRehearsal";
 import { mergeNetWindows, type NetWindow, type PassInterval } from "../domain/netWindow";
 import { contactPhaseAt, type ContactPhaseInfo } from "../domain/contactPhase";
-import { deriveAdvisories, reconcileAcks, type Advisory } from "../domain/advisory";
+import { reconcileAcks, type Advisory } from "../domain/advisory";
+import { deriveOperationalAssessment, type OperationalSnapshot } from "../domain/operationalAssessment";
+import type { ChecklistItem } from "../domain/opsChecklist";
 import { Simulator, simDate } from "../services/simulator/Simulator";
 import { MissionApi } from "../services/api/missionApi";
 import { SimulatorProvider } from "../services/providers/SimulatorProvider";
@@ -35,6 +37,9 @@ import { SatNogsTelemetryProvider } from "../services/providers/SatNogsTelemetry
 import { ReplayProvider, type ReplayFixture } from "../services/providers/ReplayProvider";
 import { loadStations, saveStations } from "./groundStations";
 import replayFixtureJson from "../fixtures/sonate2-replay.json";
+import { parseControlPlaneMode } from "../services/control/ControlPlane";
+import type { ControlPlanePort } from "../services/control/ControlPlane";
+import { DisabledControlPlaneAdapter } from "../services/control/DisabledControlPlane";
 
 export const LIVE_SATELLITE: SatelliteProfile = {
   name: "SONATE-2",
@@ -78,7 +83,14 @@ export class MissionStore {
   private ackedAdvisoryIds = new Set<string>();
   private rehearsalRolls = new Map<string, number>();
 
-  constructor(private api: MissionApi = new MissionApi()) {
+  /**
+   * Control Plane boundary — see src/services/control/ControlPlane.ts.
+   * v0.2.0 ships exactly one adapter (DisabledControlPlaneAdapter); the
+   * store never constructs anything else, regardless of controlPlaneModeRaw.
+   */
+  readonly controlPlane: ControlPlanePort = new DisabledControlPlaneAdapter();
+
+  constructor(private api: MissionApi = new MissionApi(), controlPlaneModeRaw?: string) {
     this.stations = loadStations();
     this.sim = new Simulator(this.stations);
     this.simProvider = new SimulatorProvider(this.sim);
@@ -89,6 +101,14 @@ export class MissionStore {
     this.liveTlm = new SatNogsTelemetryProvider(this.api, LIVE_SATELLITE.noradId as number, sink);
     this.replay = new ReplayProvider(replayFixtureJson as unknown as ReplayFixture);
     this.replayMs = this.replay.startMs;
+    const parsed = parseControlPlaneMode(controlPlaneModeRaw);
+    if (parsed.unrecognizedValue !== null) {
+      this.logEvent(
+        "WARN",
+        "CTRL",
+        `control plane mode "${parsed.unrecognizedValue}" not recognized — falling back to DISABLED`
+      );
+    }
     this.logEvent("INFO", "SYS", "Mission dashboard initialized (mode: SIMULATED)");
   }
 
@@ -271,30 +291,52 @@ export class MissionStore {
     ];
   }
 
-  /** Pure assembly of the current advisory set — no state mutation. */
-  private computeAdvisories(): Advisory[] {
+  /**
+   * Pure assembly of the current OperationalSnapshot — no state mutation.
+   * Every field is assembled ONCE here so advisories and the ops checklist
+   * (both derived from this same object via deriveOperationalAssessment)
+   * can never observe different underlying request/health state.
+   */
+  private buildOperationalSnapshot(): OperationalSnapshot {
     const orbitRequest: ProviderRequestState =
       this.mode === "LIVE_READ_ONLY"
         ? this.liveOrbit.getProviderHealth()[0]?.requestState ?? "NOT_REQUESTED"
         : "SUCCEEDED";
     const tlmRequest: ProviderRequestState =
       this.mode === "LIVE_READ_ONLY" ? this.liveTlm.getProviderHealth().requestState : "SUCCEEDED";
-    return deriveAdvisories({
+    return {
       mode: this.mode,
       orbit: this.getOrbitState(),
       orbitRequest,
       telemetry: this.getTelemetry(),
       tlmRequest,
       health: this.getProviderHealth(),
-    });
+      stations: this.stations,
+      phase: this.getContactPhase(),
+    };
+  }
+
+  /** Pure assembly of the current advisory set — no state mutation. */
+  private computeAdvisories(): Advisory[] {
+    return deriveOperationalAssessment(this.buildOperationalSnapshot()).advisories;
   }
 
   /** Read-only: does not mutate ack state (reconciliation happens in tick()). */
   getAdvisories(): { active: Advisory[]; acked: Advisory[] } {
-    const advisories = this.computeAdvisories();
+    return this.getOperationalAssessment().advisories;
+  }
+
+  /**
+   * Advisories (partitioned by ack state, read-only) and the ops checklist,
+   * both derived from a single OperationalSnapshot so they stay consistent
+   * with each other. Does not mutate ack state — reconciliation happens
+   * only in tick().
+   */
+  getOperationalAssessment(): { advisories: { active: Advisory[]; acked: Advisory[] }; checklist: ChecklistItem[] } {
+    const { advisories, checklist } = deriveOperationalAssessment(this.buildOperationalSnapshot());
     const active = advisories.filter((a) => !this.ackedAdvisoryIds.has(a.id));
     const acked = advisories.filter((a) => this.ackedAdvisoryIds.has(a.id));
-    return { active, acked };
+    return { advisories: { active, acked }, checklist };
   }
 
   ackAdvisory(id: string): void {

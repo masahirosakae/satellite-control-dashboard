@@ -4,8 +4,10 @@ import type { ContactPhaseInfo } from "../../domain/contactPhase";
 import { fmtAge } from "../../domain/freshness";
 import { C, MONO, fmtDur, fmtUTC, fmtUTCDate, fmtIso } from "./theme";
 import { FreshnessChip } from "./FreshnessChip";
+import { ControlPlaneStatusChip } from "./ControlPlaneStatusChip";
 import type { MissionStore } from "../../store/missionStore";
 import { simDate } from "../../services/simulator/Simulator";
+import { deriveRehearsalPlaneStatus } from "../../domain/rehearsalPlane";
 
 function Btn({
   label,
@@ -117,6 +119,8 @@ export function TopBar({
             REPLAY OF RECORDED DATA — NOT LIVE
           </span>
         )}
+
+        <ControlPlaneStatusChip status={store.controlPlane.getStatus()} rehearsalPlane={deriveRehearsalPlaneStatus(mode)} />
 
         <div className="ml-auto flex items-center gap-2">
           <span className="relative flex h-2.5 w-2.5">

@@ -5,6 +5,7 @@ import type {
   GroundStation,
   OrbitState,
   ProviderHealth,
+  ProviderRequestState,
   TelemetrySnapshot,
 } from "../src/domain/types";
 import type { ContactPhaseInfo } from "../src/domain/contactPhase";
@@ -80,7 +81,9 @@ const noContact: ContactPhaseInfo = {
 function baseInput(overrides: Partial<Parameters<typeof buildOpsChecklist>[0]> = {}) {
   return {
     orbit: orbit(),
+    orbitRequest: "SUCCEEDED" as ProviderRequestState,
     telemetry: telemetry(),
+    tlmRequest: "SUCCEEDED" as ProviderRequestState,
     health: [provider()],
     stations: [station("gs1")],
     phase: noContact,
@@ -101,28 +104,59 @@ describe("buildOpsChecklist", () => {
   });
 
   describe("orbit-source", () => {
+    it("NOT_REQUESTED -> PENDING (never FAIL)", () => {
+      const items = buildOpsChecklist(baseInput({ orbitRequest: "NOT_REQUESTED" }));
+      expect(itemById(items, "orbit-source").status).toBe("PENDING");
+    });
+
+    it("LOADING -> CHECKING (never FAIL)", () => {
+      const items = buildOpsChecklist(baseInput({ orbitRequest: "LOADING" }));
+      expect(itemById(items, "orbit-source").status).toBe("CHECKING");
+    });
+
+    it("FAILED -> FAIL, detail includes orbit.error", () => {
+      const items = buildOpsChecklist(
+        baseInput({ orbitRequest: "FAILED", orbit: orbit({ error: "network unreachable" }) })
+      );
+      const item = itemById(items, "orbit-source");
+      expect(item.status).toBe("FAIL");
+      expect(item.detail).toContain("network unreachable");
+    });
+
     it.each([
-      ["LIVE", "OK"],
-      ["SIMULATED", "OK"],
-      ["REPLAY", "OK"],
+      ["LIVE", "PASS"],
+      ["SIMULATED", "PASS"],
+      ["REPLAY", "PASS"],
       ["DELAYED", "WARN"],
       ["STALE", "WARN"],
-      ["UNAVAILABLE", "FAIL"],
-    ] as const)("maps freshness %s to %s", (freshness, expected) => {
-      const items = buildOpsChecklist(baseInput({ orbit: orbit({ provenance: provenance({ freshness }) }) }));
+      ["UNAVAILABLE", "N_A"],
+    ] as const)("SUCCEEDED maps freshness %s to %s", (freshness, expected) => {
+      const items = buildOpsChecklist(
+        baseInput({ orbitRequest: "SUCCEEDED", orbit: orbit({ provenance: provenance({ freshness }) }) })
+      );
       expect(itemById(items, "orbit-source").status).toBe(expected);
     });
   });
 
   describe("tle-age", () => {
-    it("is N_A when tleAgeHours is null", () => {
+    it("NOT_REQUESTED -> PENDING", () => {
+      const items = buildOpsChecklist(baseInput({ orbitRequest: "NOT_REQUESTED" }));
+      expect(itemById(items, "tle-age").status).toBe("PENDING");
+    });
+
+    it("LOADING -> CHECKING", () => {
+      const items = buildOpsChecklist(baseInput({ orbitRequest: "LOADING" }));
+      expect(itemById(items, "tle-age").status).toBe("CHECKING");
+    });
+
+    it("is N_A when tleAgeHours is null (request settled)", () => {
       const items = buildOpsChecklist(baseInput({ orbit: orbit({ tleAgeHours: null }) }));
       expect(itemById(items, "tle-age").status).toBe("N_A");
     });
 
-    it("is OK within the live threshold, WARN within delayed, FAIL beyond", () => {
-      const okItems = buildOpsChecklist(baseInput({ orbit: orbit({ tleAgeHours: 1 }) }));
-      expect(itemById(okItems, "tle-age").status).toBe("OK");
+    it("preserves the freshness thresholds: PASS within live, WARN within delayed, FAIL beyond", () => {
+      const passItems = buildOpsChecklist(baseInput({ orbit: orbit({ tleAgeHours: 1 }) }));
+      expect(itemById(passItems, "tle-age").status).toBe("PASS");
 
       const warnItems = buildOpsChecklist(baseInput({ orbit: orbit({ tleAgeHours: 48 }) }));
       expect(itemById(warnItems, "tle-age").status).toBe("WARN");
@@ -133,46 +167,84 @@ describe("buildOpsChecklist", () => {
   });
 
   describe("telemetry", () => {
-    it.each([
-      ["OK", "OK"],
-      ["NO_DATA", "WARN"],
-      ["TOKEN_MISSING", "WARN"],
-      ["ERROR", "FAIL"],
-      ["UNAVAILABLE", "FAIL"],
-    ] as const)("maps status %s to %s", (status, expected) => {
-      const items = buildOpsChecklist(baseInput({ telemetry: telemetry({ status }) }));
-      expect(itemById(items, "telemetry").status).toBe(expected);
+    it("NOT_REQUESTED -> PENDING", () => {
+      const items = buildOpsChecklist(baseInput({ tlmRequest: "NOT_REQUESTED" }));
+      expect(itemById(items, "telemetry").status).toBe("PENDING");
     });
 
-    it("explains that a token is required for TOKEN_MISSING", () => {
+    it("LOADING -> CHECKING", () => {
+      const items = buildOpsChecklist(baseInput({ tlmRequest: "LOADING" }));
+      expect(itemById(items, "telemetry").status).toBe("CHECKING");
+    });
+
+    it("FAILED -> FAIL", () => {
+      const items = buildOpsChecklist(baseInput({ tlmRequest: "FAILED" }));
+      expect(itemById(items, "telemetry").status).toBe("FAIL");
+    });
+
+    it("SUCCEEDED + OK -> PASS", () => {
+      const items = buildOpsChecklist(baseInput({ telemetry: telemetry({ status: "OK" }) }));
+      expect(itemById(items, "telemetry").status).toBe("PASS");
+    });
+
+    it("SUCCEEDED + NO_DATA -> INFO (not critical)", () => {
+      const items = buildOpsChecklist(baseInput({ telemetry: telemetry({ status: "NO_DATA" }) }));
+      expect(itemById(items, "telemetry").status).toBe("INFO");
+    });
+
+    it("SUCCEEDED + TOKEN_MISSING -> CONFIG_REQUIRED (never FAIL), detail mentions the token env var", () => {
       const items = buildOpsChecklist(baseInput({ telemetry: telemetry({ status: "TOKEN_MISSING" }) }));
-      expect(itemById(items, "telemetry").detail.toLowerCase()).toContain("token");
+      const item = itemById(items, "telemetry");
+      expect(item.status).toBe("CONFIG_REQUIRED");
+      expect(item.detail).toContain("SATNOGS_API_TOKEN");
     });
 
-    it("includes the error message when present", () => {
+    it("SUCCEEDED + ERROR -> FAIL, includes the error message", () => {
       const items = buildOpsChecklist(baseInput({ telemetry: telemetry({ status: "ERROR", error: "boom" }) }));
-      expect(itemById(items, "telemetry").detail).toContain("boom");
+      const item = itemById(items, "telemetry");
+      expect(item.status).toBe("FAIL");
+      expect(item.detail).toContain("boom");
+    });
+
+    it("SUCCEEDED + UNAVAILABLE -> N_A (defensive-only)", () => {
+      const items = buildOpsChecklist(baseInput({ telemetry: telemetry({ status: "UNAVAILABLE" }) }));
+      expect(itemById(items, "telemetry").status).toBe("N_A");
     });
   });
 
-  describe("providers", () => {
-    it("is FAIL when any provider is in ERROR", () => {
+  describe("providers — precedence FAILED > TOKEN_MISSING > CHECKING > PASS", () => {
+    it("is FAIL when any provider requestState is FAILED, even if others are TOKEN_MISSING/loading", () => {
       const items = buildOpsChecklist(
-        baseInput({ health: [provider({ status: "OK" }), provider({ providerId: "p2", label: "Bad", status: "ERROR" })] })
+        baseInput({
+          health: [
+            provider({ providerId: "p1", status: "TOKEN_MISSING" }),
+            provider({ providerId: "p2", label: "Bad", status: "ERROR", requestState: "FAILED" }),
+            provider({ providerId: "p3", requestState: "LOADING" }),
+          ],
+        })
       );
       const item = itemById(items, "providers");
       expect(item.status).toBe("FAIL");
       expect(item.detail).toContain("Bad");
     });
 
-    it("is WARN when a provider is DEGRADED or TOKEN_MISSING (no ERROR present)", () => {
-      const items = buildOpsChecklist(baseInput({ health: [provider({ status: "OK" }), provider({ providerId: "p2", status: "TOKEN_MISSING" })] }));
-      expect(itemById(items, "providers").status).toBe("WARN");
+    it("is CONFIG_REQUIRED when a provider is TOKEN_MISSING (no FAILED requestState present)", () => {
+      const items = buildOpsChecklist(
+        baseInput({ health: [provider({ status: "OK" }), provider({ providerId: "p2", status: "TOKEN_MISSING" })] })
+      );
+      expect(itemById(items, "providers").status).toBe("CONFIG_REQUIRED");
     });
 
-    it("is OK when all providers are OK", () => {
+    it("is CHECKING when a provider is still NOT_REQUESTED/LOADING (no FAILED/TOKEN_MISSING present)", () => {
+      const items = buildOpsChecklist(
+        baseInput({ health: [provider({ status: "OK" }), provider({ providerId: "p2", requestState: "LOADING" })] })
+      );
+      expect(itemById(items, "providers").status).toBe("CHECKING");
+    });
+
+    it("is PASS when all providers are OK and SUCCEEDED", () => {
       const items = buildOpsChecklist(baseInput({ health: [provider(), provider({ providerId: "p2" })] }));
-      expect(itemById(items, "providers").status).toBe("OK");
+      expect(itemById(items, "providers").status).toBe("PASS");
     });
   });
 
@@ -182,10 +254,10 @@ describe("buildOpsChecklist", () => {
       expect(itemById(items, "stations").status).toBe("FAIL");
     });
 
-    it("is OK with a count in the detail when stations exist", () => {
+    it("is PASS with a count in the detail when stations exist", () => {
       const items = buildOpsChecklist(baseInput({ stations: [station("a"), station("b")] }));
       const item = itemById(items, "stations");
-      expect(item.status).toBe("OK");
+      expect(item.status).toBe("PASS");
       expect(item.detail).toContain("2");
     });
   });
@@ -196,7 +268,7 @@ describe("buildOpsChecklist", () => {
       expect(itemById(items, "next-contact").status).toBe("WARN");
     });
 
-    it("is OK and says 'in contact' for CONTACT", () => {
+    it("is PASS and says 'in contact' for CONTACT", () => {
       const phase: ContactPhaseInfo = {
         phase: "CONTACT",
         activeWindow: { startMs: 0, endMs: 1000, stationIds: ["gs1"] },
@@ -206,11 +278,11 @@ describe("buildOpsChecklist", () => {
       };
       const items = buildOpsChecklist(baseInput({ phase }));
       const item = itemById(items, "next-contact");
-      expect(item.status).toBe("OK");
+      expect(item.status).toBe("PASS");
       expect(item.detail.toLowerCase()).toContain("contact");
     });
 
-    it("is OK for PREP/IDLE and reports time to AOS", () => {
+    it("is PASS for PREP/IDLE and reports time to AOS", () => {
       const phase: ContactPhaseInfo = {
         phase: "IDLE",
         activeWindow: null,
@@ -220,7 +292,7 @@ describe("buildOpsChecklist", () => {
       };
       const items = buildOpsChecklist(baseInput({ phase }));
       const item = itemById(items, "next-contact");
-      expect(item.status).toBe("OK");
+      expect(item.status).toBe("PASS");
       expect(item.detail).toMatch(/\d/);
     });
   });

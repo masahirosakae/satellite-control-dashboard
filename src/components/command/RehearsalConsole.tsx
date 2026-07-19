@@ -46,6 +46,7 @@ export function RehearsalConsole({ store }: { store: MissionStore }) {
   const [param, setParam] = useState("");
   const [armed, setArmed] = useState(false);
   const def = COMMANDS.find((c) => c.name === cmd);
+  const rehearsals = store.getRehearsals();
   useEffect(() => {
     setParam(def?.param ? def.param.default : "");
   }, [cmd, def]);
@@ -145,14 +146,14 @@ export function RehearsalConsole({ store }: { store: MissionStore }) {
             </tr>
           </thead>
           <tbody>
-            {store.getRehearsals().length === 0 && (
+            {rehearsals.length === 0 && (
               <tr>
                 <td colSpan={7} className="text-center" style={{ color: C.dim, padding: "12px 8px" }}>
                   No rehearsal commands recorded yet.
                 </td>
               </tr>
             )}
-            {store.getRehearsals().map((r) => (
+            {rehearsals.map((r) => (
               <tr key={r.id} style={{ borderTop: "1px solid " + C.line, color: C.text }}>
                 <td style={{ padding: "3px 8px", color: C.violet }}>{r.id}</td>
                 <td style={{ padding: "3px 8px" }}><ModeBadge mode={r.createdInMode} /></td>

@@ -17,7 +17,6 @@ import { GroundStationEditor } from "../components/mission/GroundStationEditor";
 import { OperationsChecklist } from "../components/mission/OperationsChecklist";
 import { AdvisoryPanel } from "../components/mission/AdvisoryPanel";
 import { SIM_COMM_RANGE_KM } from "../domain/simpleOrbit";
-import { buildOpsChecklist } from "../domain/opsChecklist";
 import { simDate } from "../services/simulator/Simulator";
 import { useMissionStore } from "../store/useMissionStore";
 
@@ -34,14 +33,9 @@ export default function App() {
   const nowMs = store.displayNow.getTime();
   const netWindows = store.getNetWindows();
   const contactPhase = store.getContactPhase();
-  const advisories = store.getAdvisories();
-  const checklist = buildOpsChecklist({
-    orbit,
-    telemetry,
-    health,
-    stations: store.stations,
-    phase: contactPhase,
-  });
+  const assessment = store.getOperationalAssessment();
+  const advisories = assessment.advisories;
+  const checklist = assessment.checklist;
 
   const { trackPast, trackFuture } = (() => {
     const { track, trackStartMs, trackStepS } = orbit;

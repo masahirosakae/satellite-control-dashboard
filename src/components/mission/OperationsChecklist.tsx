@@ -2,11 +2,20 @@ import type { ChecklistItem, ChecklistStatus } from "../../domain/opsChecklist";
 import { C, MONO } from "../layout/theme";
 
 const STATUS_COLOR: Record<ChecklistStatus, string> = {
-  OK: C.green,
+  PASS: C.green,
   WARN: C.amber,
   FAIL: C.red,
+  CHECKING: C.cyan,
+  PENDING: C.dim,
+  CONFIG_REQUIRED: C.amber,
+  INFO: C.cyan,
   N_A: C.dim,
 };
+
+function statusLabel(status: ChecklistStatus): string {
+  if (status === "N_A") return "N/A";
+  return status.replace(/_/g, " ");
+}
 
 export function OperationsChecklist({ items }: { items: ChecklistItem[] }) {
   return (
@@ -27,7 +36,7 @@ export function OperationsChecklist({ items }: { items: ChecklistItem[] }) {
                 background: STATUS_COLOR[it.status] + "1a",
               }}
             >
-              {it.status}
+              {statusLabel(it.status)}
             </span>
           </div>
           <div style={{ fontSize: 9, color: C.dim, marginTop: 2 }}>{it.detail}</div>
