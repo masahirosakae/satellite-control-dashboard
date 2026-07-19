@@ -141,7 +141,7 @@ export class ReplayProvider implements SatelliteDataProvider {
       ":" +
       Math.floor(now.getTime() / (5 * 60_000));
     if (this.passCache?.key === key) return this.passCache.passes;
-    const passes = predictPasses(this.engine, stations, now, { horizonS: 12 * 3600 });
+    const passes = predictPasses(this.engine, stations, now, { horizonS: 24 * 3600 });
     this.passCache = { key, passes };
     return passes;
   }

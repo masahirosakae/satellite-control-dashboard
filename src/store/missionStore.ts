@@ -21,6 +21,8 @@ import type {
   TelemetrySnapshot,
 } from "../domain/types";
 import { createCommandRehearsal } from "../domain/commandRehearsal";
+import { mergeNetWindows, type NetWindow, type PassInterval } from "../domain/netWindow";
+import { contactPhaseAt, type ContactPhaseInfo } from "../domain/contactPhase";
 import { Simulator, simDate } from "../services/simulator/Simulator";
 import { MissionApi } from "../services/api/missionApi";
 import { SimulatorProvider } from "../services/providers/SimulatorProvider";
@@ -200,6 +202,19 @@ export class MissionStore {
     if (this.mode === "SIMULATED") return this.simProvider.getTelemetry();
     if (this.mode === "REPLAY") return this.replay.getTelemetry(new Date(this.replayMs));
     return this.liveTlm.getTelemetry(new Date());
+  }
+
+  getNetWindows(): NetWindow[] {
+    const passes: PassInterval[] = this.getPassPredictions().map((p) => ({
+      stationId: p.stationId,
+      aosMs: Date.parse(p.aos),
+      losMs: Date.parse(p.los),
+    }));
+    return mergeNetWindows(passes);
+  }
+
+  getContactPhase(): ContactPhaseInfo {
+    return contactPhaseAt(this.displayNow.getTime(), this.getNetWindows());
   }
 
   getProviderHealth(): ProviderHealth[] {

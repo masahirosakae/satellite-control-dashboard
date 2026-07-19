@@ -14,7 +14,9 @@ import { DownlinkPanel } from "../components/mission/DownlinkPanel";
 import { ObservationBrowser } from "../components/mission/ObservationBrowser";
 import { ProviderHealthPanel } from "../components/mission/ProviderHealthPanel";
 import { GroundStationEditor } from "../components/mission/GroundStationEditor";
+import { OperationsChecklist } from "../components/mission/OperationsChecklist";
 import { SIM_COMM_RANGE_KM } from "../domain/simpleOrbit";
+import { buildOpsChecklist } from "../domain/opsChecklist";
 import { simDate } from "../services/simulator/Simulator";
 import { useMissionStore } from "../store/useMissionStore";
 
@@ -29,15 +31,28 @@ export default function App() {
   const passes = store.getPassPredictions();
   const health = store.getProviderHealth();
   const nowMs = store.displayNow.getTime();
+  const netWindows = store.getNetWindows();
+  const contactPhase = store.getContactPhase();
+  const checklist = buildOpsChecklist({
+    orbit,
+    telemetry,
+    health,
+    stations: store.stations,
+    phase: contactPhase,
+  });
 
   const { trackPast, trackFuture } = (() => {
     const { track, trackStartMs, trackStepS } = orbit;
     if (trackStartMs === null || trackStepS === null || track.length === 0) {
       return { trackPast: [], trackFuture: [] };
     }
-    const splitIndex = Math.round((nowMs - trackStartMs) / (trackStepS * 1000));
-    const clamped = Math.max(0, Math.min(track.length, splitIndex));
-    return { trackPast: track.slice(0, clamped), trackFuture: track.slice(clamped) };
+    // Last sample at or before now; the two slices share that boundary
+    // point so the past/future polylines connect with no visible gap.
+    const idx = Math.floor((nowMs - trackStartMs) / (trackStepS * 1000));
+    const pastEnd = Math.max(0, Math.min(track.length, idx + 1));
+    const trackPast = track.slice(0, pastEnd);
+    const trackFuture = track.slice(Math.max(0, pastEnd - 1));
+    return { trackPast, trackFuture };
   })();
   const snap = store.sim.snapshotCache;
   const looks = isSim ? [] : store.getStationLooks();
@@ -104,7 +119,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen w-full flex flex-col" style={{ background: C.bg, color: C.text }}>
-      <TopBar store={store} orbit={orbit} telemetry={telemetry} linkLabel={linkLabel} linkOn={linkOn} />
+      <TopBar store={store} orbit={orbit} telemetry={telemetry} linkLabel={linkLabel} linkOn={linkOn} contactPhase={contactPhase} />
       <div className="grid gap-2 p-2 grid-cols-1 lg:grid-cols-12">
         <Panel
           title="ORBIT / GROUND TRACK"
@@ -138,8 +153,14 @@ export default function App() {
         </Panel>
 
         <div className="lg:col-span-5 grid grid-rows-2 gap-2" style={{ height: 440 }}>
-          <Panel title={isSim ? "PASS SCHEDULE — NEXT 6H (SIM)" : "PASS PREDICTION — SGP4 · NEXT 6H"}>
-            <PassTimeline nowMs={nowMs} stations={store.stations} passes={timelinePasses} realPrediction={!isSim} />
+          <Panel title={isSim ? "PASS SCHEDULE — NEXT 24H (SIM)" : "PASS PREDICTION — SGP4 · NEXT 24H"}>
+            <PassTimeline
+              nowMs={nowMs}
+              stations={store.stations}
+              passes={timelinePasses}
+              netWindows={netWindows}
+              realPrediction={!isSim}
+            />
           </Panel>
           <Panel title={isSim ? "DOWNLINK / FILE TRANSFER (VIRTUAL)" : "RECEIVED OBSERVATION / DECODED FRAME BROWSER"}>
             {isSim ? <DownlinkPanel files={store.sim.files} /> : <ObservationBrowser set={observations} />}
@@ -163,12 +184,15 @@ export default function App() {
           <EventLog entries={logEntries} />
         </Panel>
 
-        <Panel title="PROVIDER HEALTH" className="lg:col-span-5" style={{ height: 240 }}>
+        <Panel title="PROVIDER HEALTH" className="lg:col-span-4" style={{ height: 240 }}>
           <ProviderHealthPanel health={health} />
+        </Panel>
+        <Panel title="OPERATIONS CHECKLIST" className="lg:col-span-3" style={{ height: 240 }}>
+          <OperationsChecklist items={checklist} />
         </Panel>
         <Panel
           title="GROUND STATIONS"
-          className="lg:col-span-7"
+          className="lg:col-span-5"
           style={{ height: 240 }}
           right={<span style={{ fontSize: 9, color: C.dim, fontFamily: MONO }}>USER-EDITABLE · STORED LOCALLY</span>}
         >

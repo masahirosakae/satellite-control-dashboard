@@ -1,5 +1,6 @@
 /** Mode-agnostic pass schedule timeline. Times are epoch ms. */
 import type { GroundStation } from "../../domain/types";
+import type { NetWindow } from "../../domain/netWindow";
 import { C, MONO, fmtDur, fmtUTC } from "../layout/theme";
 
 export interface TimelinePass {
@@ -11,16 +12,35 @@ export interface TimelinePass {
   losAzimuthDeg: number | null;
 }
 
+/** Elevation-scaled fill alpha: 0.15..0.6 for inactive bars, 0.3..0.75 for active bars. */
+function elevationAlpha(maxElevationDeg: number, active: boolean): number {
+  const ratio = Math.min(1, maxElevationDeg / 90);
+  return (active ? 0.3 : 0.15) + 0.45 * ratio;
+}
+
+function axisLabels(spanS: number): string[] {
+  const tickS = spanS / 6;
+  const labels = ["NOW"];
+  for (let i = 1; i <= 6; i++) {
+    const hrs = (tickS * i) / 3600;
+    labels.push("+" + (Number.isInteger(hrs) ? hrs : Number(hrs.toFixed(1))) + "h");
+  }
+  return labels;
+}
+
 export function PassTimeline({
   nowMs,
   stations,
   passes,
-  spanS = 6 * 3600,
+  netWindows = [],
+  spanS = 24 * 3600,
   realPrediction,
 }: {
   nowMs: number;
   stations: GroundStation[];
   passes: TimelinePass[];
+  /** Merged net contact windows (union across stations), rendered as a lane above the per-station rows. */
+  netWindows?: NetWindow[];
   spanS?: number;
   /** true when passes come from SGP4 (LIVE/REPLAY) — shows max-el details */
   realPrediction: boolean;
@@ -58,6 +78,41 @@ export function PassTimeline({
         )}
       </div>
       <div className="flex-1 min-h-0 flex flex-col justify-around gap-1">
+        <div className="flex items-center gap-2">
+          <span className="w-20 shrink-0" style={{ color: C.violet, fontFamily: MONO, fontSize: 9, fontWeight: 700 }}>
+            NET
+          </span>
+          <div
+            className="relative flex-1 h-4 overflow-hidden"
+            style={{ background: "#070d18", border: "1px solid " + C.line, borderRadius: 2 }}
+          >
+            {netWindows
+              .filter((w) => w.endMs > nowMs && w.startMs < nowMs + spanS * 1000)
+              .map((w, i) => {
+                const l = Math.max(0, ((w.startMs - nowMs) / (spanS * 1000)) * 100);
+                const r = Math.min(100, ((w.endMs - nowMs) / (spanS * 1000)) * 100);
+                const active = w.startMs <= nowMs && w.endMs > nowMs;
+                return (
+                  <div
+                    key={i}
+                    className="absolute top-0 bottom-0"
+                    title={
+                      "NET " + fmtUTC(new Date(w.startMs)) + " – " + fmtUTC(new Date(w.endMs)) +
+                      " · " + w.stationIds.map(nameOf).join(", ")
+                    }
+                    style={{
+                      left: l + "%",
+                      width: Math.max(0.6, r - l) + "%",
+                      borderRadius: 2,
+                      background: active ? "rgba(139,123,244,0.55)" : "rgba(139,123,244,0.3)",
+                      border: "1px solid " + C.violet,
+                    }}
+                  />
+                );
+              })}
+            <div className="absolute top-0 bottom-0 w-px" style={{ left: 0, background: C.red }} />
+          </div>
+        </div>
         {stations.map((gs) => (
           <div key={gs.id} className="flex items-center gap-2">
             <span className="w-20 shrink-0" style={{ color: C.dim, fontFamily: MONO, fontSize: 9 }}>
@@ -73,6 +128,14 @@ export function PassTimeline({
                   const l = Math.max(0, ((p.aosMs - nowMs) / (spanS * 1000)) * 100);
                   const r = Math.min(100, ((p.losMs - nowMs) / (spanS * 1000)) * 100);
                   const active = p.aosMs <= nowMs && p.losMs > nowMs;
+                  const background =
+                    p.maxElevationDeg !== null
+                      ? active
+                        ? "rgba(63,224,137," + elevationAlpha(p.maxElevationDeg, true) + ")"
+                        : "rgba(79,216,235," + elevationAlpha(p.maxElevationDeg, false) + ")"
+                      : active
+                        ? "rgba(63,224,137,0.55)"
+                        : "rgba(79,216,235,0.3)";
                   return (
                     <div
                       key={i}
@@ -85,7 +148,7 @@ export function PassTimeline({
                         left: l + "%",
                         width: Math.max(0.6, r - l) + "%",
                         borderRadius: 2,
-                        background: active ? "rgba(63,224,137,0.55)" : "rgba(79,216,235,0.3)",
+                        background,
                         border: "1px solid " + (active ? C.green : C.cyan),
                       }}
                     />
@@ -97,7 +160,9 @@ export function PassTimeline({
         ))}
       </div>
       <div className="flex justify-between" style={{ color: C.dim, fontFamily: MONO, fontSize: 8 }}>
-        <span>NOW</span><span>+1h</span><span>+2h</span><span>+3h</span><span>+4h</span><span>+5h</span><span>+6h</span>
+        {axisLabels(spanS).map((label, i) => (
+          <span key={i}>{label}</span>
+        ))}
       </div>
     </div>
   );

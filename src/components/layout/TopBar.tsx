@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import type { OrbitState, TelemetrySnapshot } from "../../domain/types";
+import type { ContactPhaseInfo } from "../../domain/contactPhase";
 import { fmtAge } from "../../domain/freshness";
-import { C, MONO, fmtUTC, fmtUTCDate, fmtIso } from "./theme";
+import { C, MONO, fmtDur, fmtUTC, fmtUTCDate, fmtIso } from "./theme";
 import { FreshnessChip } from "./FreshnessChip";
 import type { MissionStore } from "../../store/missionStore";
 import { simDate } from "../../services/simulator/Simulator";
@@ -46,12 +47,14 @@ export function TopBar({
   telemetry,
   linkLabel,
   linkOn,
+  contactPhase,
 }: {
   store: MissionStore;
   orbit: OrbitState;
   telemetry: TelemetrySnapshot;
   linkLabel: string;
   linkOn: boolean;
+  contactPhase: ContactPhaseInfo;
 }) {
   const [now, setNow] = useState(new Date());
   useEffect(() => {
@@ -133,6 +136,19 @@ export function TopBar({
         <span>
           <span style={{ color: C.dim }}>UTC </span>
           <span style={{ color: C.text }}>{fmtUTC(now)}</span>
+        </span>
+
+        <span>
+          {contactPhase.phase === "CONTACT" && (
+            <span style={{ color: C.green }}>{"LOS T−" + fmtDur((contactPhase.tToLosMs ?? 0) / 1000)}</span>
+          )}
+          {contactPhase.phase === "PREP" && (
+            <span style={{ color: C.amber }}>{"NET T−" + fmtDur((contactPhase.tToAosMs ?? 0) / 1000)}</span>
+          )}
+          {contactPhase.phase === "IDLE" && (
+            <span style={{ color: C.dim }}>{"NET T−" + fmtDur((contactPhase.tToAosMs ?? 0) / 1000)}</span>
+          )}
+          {contactPhase.phase === "NO_WINDOW" && <span style={{ color: C.dim }}>NET —</span>}
         </span>
 
         {mode === "SIMULATED" && (

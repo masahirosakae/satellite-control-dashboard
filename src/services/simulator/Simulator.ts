@@ -198,7 +198,7 @@ export class Simulator {
   }
 
   computePasses(): void {
-    const horizon = 8 * 3600;
+    const horizon = 24 * 3600;
     const step = 30;
     const passes: SimPass[] = [];
     for (const gs of this.stations) {
