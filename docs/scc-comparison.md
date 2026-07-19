@@ -42,8 +42,10 @@
 | 対象 | 架空衛星 + (オプションで)実アンテナHW | 実衛星の公開データ(読み取り専用)+ 仮想衛星 + リプレイ |
 | 通信 | WebSocket双方向(op送信あり) | HTTP GET(自BFFのみ)、単方向 |
 | コマンド | 実装あり(モック実行) | Rehearsalのみ、`transmitted: false` 型保証 |
+| Control Plane | 独立した概念としてモデル化されていない — 制御そのものが目的 | インターフェース+唯一の永続的disabledアダプタ(`src/services/control/`)。境界はarchitecture testsで強制 |
+| 運用アセスメント | アラームは衛星フォールト指向 | `OperationalAssessment`(advisory + ops checklist)を単一の `OperationalSnapshot` から導出し、provider request lifecycleでゲート。スコープはダッシュボード自身の観測状態に限定 |
 | 地図データ | 独自ポリライン | Natural Earth / world-atlas(v0.2.0で導入) |
 | 軌道 | satellite.js SGP4 | 同じくsatellite.js SGP4(LIVE/REPLAY) |
-| 安全境界 | なし(制御が目的) | Data Plane / Control Plane分離が設計の核 |
+| 安全境界 | なし(制御が目的) | Data Plane / Rehearsal Plane / Control Plane分離が設計の核 |
 
 関連: [architecture.md](architecture.md) ・ [safety-and-scope.md](safety-and-scope.md) ・ [control-plane-boundary.md](control-plane-boundary.md)

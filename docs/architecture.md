@@ -1,16 +1,30 @@
 # アーキテクチャ
 
-[`README.md`](../README.md) の概要を前提に、実装の内部構造を解説します。安全設計・禁止事項の根拠は [`safety-and-scope.md`](safety-and-scope.md) を参照してください。
+[`README.md`](../README.md) の概要を前提に、実装の内部構造を解説します。安全設計・禁止事項の根拠は [`safety-and-scope.md`](safety-and-scope.md)、Control Plane境界の詳細は [`control-plane-boundary.md`](control-plane-boundary.md) を参照してください。
 
 ## 目次
 
-1. [Provider Architecture](#provider-architecture)
-2. [BFF構成](#bff構成)
-3. [Orbit data flow(LIVE_READ_ONLY)](#orbit-data-flowlive_read_only)
-4. [SatNOGS data flow](#satnogs-data-flow)
-5. [Command Rehearsal flow](#command-rehearsal-flow)
-6. [データprovenance / freshnessモデル](#データprovenance--freshnessモデル)
-7. [SIMULATED / LIVE_READ_ONLY / REPLAY の責務分離](#simulated--live_read_only--replay-の責務分離)
+1. [3 Plane模型と依存方向](#3-plane模型と依存方向)
+2. [Provider Architecture](#provider-architecture)
+3. [BFF構成](#bff構成)
+4. [Orbit data flow(LIVE_READ_ONLY)](#orbit-data-flowlive_read_only)
+5. [SatNOGS data flow](#satnogs-data-flow)
+6. [Provider request lifecycle・Advisory・Operations checklist](#provider-request-lifecycleadvisoryoperations-checklist)
+7. [Command Rehearsal flow と文脈モデル](#command-rehearsal-flow-と文脈モデル)
+8. [データprovenance / freshnessモデル](#データprovenance--freshnessモデル)
+9. [NETコンタクトウィンドウとcontact phase](#netコンタクトウィンドウとcontact-phase)
+10. [世界地図の描画](#世界地図の描画)
+11. [SIMULATED / LIVE_READ_ONLY / REPLAY の責務分離](#simulated--live_read_only--replay-の責務分離)
+
+## 3 Plane模型と依存方向
+
+コードベースは3つのplaneに分かれています(詳細は [`control-plane-boundary.md`](control-plane-boundary.md) を参照)。
+
+- **Data Plane** — 本ドキュメントで扱う範囲全体(プロバイダ、BFF、freshness、advisory、ops checklist)。実際の外部I/Oを持つ唯一のplaneであり、常に読み取り専用。
+- **Rehearsal Plane** — `src/domain/commandRehearsal.ts` と `RehearsalConsole.tsx`。ローカル完結・ウォールクロック駆動・I/Oゼロ。
+- **Control Plane** — `src/services/control/`。インターフェースと唯一の永続的disabledアダプタのみ。実際のcapabilityは無い。
+
+`tests/architecture.test.ts` はTypeScript ASTレベルでこれらの依存方向を強制します: `src/services/control/` はproviders/api/store/rehearsalのいずれもimportせず、rehearsal/providerコードはcontrolをimportしません。唯一意図的な例外は `src/store/missionStore.ts` で、`DisabledControlPlaneAdapter` を構築し読み取り専用の `store.controlPlane` として公開します。
 
 ## Provider Architecture
 
@@ -157,7 +171,33 @@ sequenceDiagram
 - **テレメトリ(Telemetry)**: `config.satnogsApiToken` が `null` の場合、`fetchTelemetry()` すら呼ばずに即座に `TOKEN_MISSING` を返します。トークンが設定されている場合のみ `server/clients/satnogs.ts` がヘッダにトークンを付与してSatNOGS DBへ問い合わせます。取得したエントリは `normalizeTelemetryEntry()` で正規化され、`src/domain/telemetryMapping.ts` の `mapTelemetryFields()` が既知フィールド(電圧/電流/温度/CPU/信号/ストレージ)を正規表現ルールでカードにマッピングし、マッチしないフィールドは生データ行として表示します。
 - **UI側のTOKEN_MISSING処理**: `SatNogsTelemetryProvider.getProviderHealth()` が `status: "TOKEN_MISSING"` を返し、`LiveTelemetryPanel` は "TELEMETRY TOKEN IS NOT CONFIGURED" 系のメッセージを表示します。テレメトリカードは実測フィールドが無い場合、仮想値で埋めることはせず `N/A` を表示します。
 
-## Command Rehearsal flow
+## Provider request lifecycle・Advisory・Operations checklist
+
+データのスナップショット自体(`OrbitState`, `TelemetrySnapshot`, ...)とは別に、各ライブデータ領域は**リクエストライフサイクル** `ProviderRequestState`(`src/domain/types.ts`)を持ちます: `"NOT_REQUESTED" | "LOADING" | "SUCCEEDED" | "FAILED"`。これは、フェッチが失敗した際の理由を表す `DataAvailabilityReason`(`"AVAILABLE" | "NO_DATA" | "TOKEN_MISSING" | "FETCH_FAILED" | "PARSE_FAILED"`)とは独立して管理されます。
+
+`src/domain/advisory.ts` の `deriveAdvisories()` と `src/domain/opsChecklist.ts` の `buildOpsChecklist()` は、いずれもデータのスナップショットを見る前に `ProviderRequestState` でゲートします。
+
+- `NOT_REQUESTED` / `LOADING` → チェックリストは `PENDING` / `CHECKING` を表示し、advisoryはその領域について何も発火しません。これにより、起動直後やモード切替直後、最初のリクエストが完了する前の一瞬に偽の `FAIL` がちらつくことを防ぎます。
+- `FAILED` → チェックリストは `FAIL` を表示し、`CRITICAL` advisoryが発火します。
+- `SUCCEEDED` → チェックリストとadvisoryは実際のデータ(freshness、`TelemetryStatus`、provider health)を見てPASS/WARN/INFO/CONFIG_REQUIRED/N_A(advisoryはWARN/CRITICAL)を決定します。
+
+`ChecklistStatus`(`src/domain/opsChecklist.ts`)は8種類のメンバーを持ちます: `PASS | WARN | FAIL | CHECKING | PENDING | CONFIG_REQUIRED | INFO | N_A`。特にSatNOGS APIトークン未設定は `FAIL` ではなく `CONFIG_REQUIRED` にマッピングされます — これは障害ではなく運用者へのアクション項目です。
+
+両関数は**同一の**スナップショットオブジェクト `OperationalSnapshot`(`src/domain/operationalAssessment.ts`)から呼び出されます。
+
+```typescript
+export interface OperationalSnapshot {
+  mode: MissionMode; orbit: OrbitState; orbitRequest: ProviderRequestState;
+  telemetry: TelemetrySnapshot; tlmRequest: ProviderRequestState;
+  health: ProviderHealth[]; stations: GroundStation[]; phase: ContactPhaseInfo;
+}
+
+export function deriveOperationalAssessment(snapshot: OperationalSnapshot): OperationalAssessment
+```
+
+`MissionStore.buildOperationalSnapshot()` は、このオブジェクトを1回の呼び出しごとにちょうど1回だけ組み立て(mode、`getOrbitState()`、軌道/テレメトリのリクエスト状態 — SIMULATED/REPLAYでは `"SUCCEEDED"` 固定、LIVE_READ_ONLYではライブプロバイダのhealthから取得 — `getTelemetry()`、`getProviderHealth()`、`stations`、`getContactPhase()`)、`MissionStore.getOperationalAssessment()` がこれを `deriveOperationalAssessment()` に1回通します。これが、advisoryパネルとops checklistが同じ根本状態について決して食い違えないことを保証する唯一の情報源です — 一方がもう一方より新しいスナップショットから構築されるコードパスは存在しません。`App.tsx` はレンダリングごとに1回だけ `store.getOperationalAssessment()` を呼び、`assessment.advisories` / `assessment.checklist` をそのまま下位コンポーネントに渡します。`store.getAdvisories()` は同じ関数への薄い委譲として残されており、advisoryのみが必要な呼び出し元にはそのまま使えます。
+
+## Command Rehearsal flow と文脈モデル
 
 LIVE_READ_ONLY / REPLAYのコマンドコンソール(`RehearsalConsole`)は、ネットワーク層を一切持たない純粋なデータフローです。
 
@@ -171,7 +211,15 @@ flowchart LR
 
 `createCommandRehearsal()` は入力(シーケンス番号・コマンド名・パラメータ・モード・現在時刻)から `CommandRehearsal` オブジェクトと表示用ログメッセージを生成して返すだけの同期関数で、`fetch` / `WebSocket` / `XMLHttpRequest` 等への参照は一切ありません。`CommandRehearsal.transmitted` はTypeScriptのリテラル型 `false` として宣言されており(`src/domain/types.ts`)、`true` を代入しようとすればコンパイルエラーになります。この経路にネットワーク層が存在しないことは `tests/rehearsal.test.ts` が実際にfetchをモックして「呼ばれないこと」を検証しています。
 
-（SIMULATEDモードのコマンドコンソールは別経路で、`Simulator.sendCommand()` が `setTimeout` による仮想ACKのみを生成する、隔離された仮想アップリンクです。詳細は [`safety-and-scope.md`](safety-and-scope.md) を参照。）
+**文脈モデル**: すべての `CommandRehearsal` は意図的に分離された3つのフィールド(`src/domain/types.ts`)を持ち、決して混同されません。
+
+- `createdInMode: RehearsalMode`(`"LIVE_READ_ONLY" | "REPLAY"`)
+- `createdAtWallClock: string` — 運用者がリハーサルを作成した実際のウォールクロック時刻
+- `contextTimestamp: string` — その瞬間のミッション**表示**時計。LIVE_READ_ONLYでは実時間と一致しますが、REPLAYではリプレイカーソルの時刻であり、実時間と大きく異なりうる
+
+`MissionStore` は**モードごとに独立したリハーサル履歴**(`rehearsalHistories: Record<RehearsalMode, CommandRehearsal[]>`)を保持するため、LIVE_READ_ONLYとREPLAYを行き来しても2つのログが混ざることはなく、`getRehearsals()` はSIMULATEDモードでは常に空配列を返します(SIMULATEDは無関係な独自の仮想アップリンクコンソール、`CommandPanel` / `Simulator.sendCommand()` を持ちます)。ライフサイクル(`CREATED → REHEARSAL_ACK → REHEARSAL_EXEC | REHEARSAL_FAIL`)は経過ウォールクロック時間のみから進行し(`advanceRehearsal()`)、作成時に一度だけ引かれた乱数ロールをリハーサルごとに保持することで、結果が決定した後は決定論的になります。1ティック分を超えて期限超過したリハーサルは1回の呼び出しで直接終端状態までジャンプし、ACKと終端の両方のログメッセージを順序どおりに発行するため、UIが古い中間状態を観測することはありません。
+
+(SIMULATEDモードのコマンドコンソールは別経路で、`Simulator.sendCommand()` が `setTimeout` による仮想ACKのみを生成する、隔離された仮想アップリンクです。詳細は [`safety-and-scope.md`](safety-and-scope.md) を参照。)
 
 ## データprovenance / freshnessモデル
 
@@ -202,6 +250,30 @@ export interface DataProvenance {
 
 **`staleCache` の意味論**: BFFのorbitルートは、上流(CelesTrak)への問い合わせが失敗しキャッシュが期限切れの場合でも、古いキャッシュが存在すれば `staleCache: true` を付けてそのまま返します(`server/routes/orbit.ts`)。これは「実データを架空データに置き換える」のではなく「同じ実データを、古い可能性があると明示した上で使い続ける」フォールバックです。クライアント(`CelesTrakOrbitProvider`)はこの場合 `ProviderHealth.status` を `DEGRADED` にし、`freshness` は `observedAt`(TLE epoch)からの経過時間に応じて自然に `STALE` へ遷移します。observations/telemetryは同様のstaleキャッシュ機構を持たず、上流失敗はそのまま `ERROR` として伝播します。
 
+## NETコンタクトウィンドウとcontact phase
+
+`src/domain/netWindow.ts` の `mergeNetWindows()` は、局ごとのパス区間(`PassInterval { stationId, aosMs, losMs }`)を、少なくとも1局が衛星を可視状態に捉えている連続区間である、互いに重ならない時系列ソート済みの `NetWindow` 群にマージする純粋関数です。区間同士は重なっている場合、または区間の間隔が `gapToleranceS` 秒(既定0)以内の場合にマージされます(既定値0でも、あるパスのLOSが次のパスのAOSにちょうど一致すればマージされます)。
+
+`src/domain/contactPhase.ts` の `contactPhaseAt(nowMs, windows)` は、マージ済みウィンドウに対して現在時刻を4つのフェーズのいずれかに分類します。
+
+- `CONTACT` — アクティブなウィンドウ内。`tToLosMs` がセットされる。
+- `PREP` — 次ウィンドウのAOSまで `PREP_THRESHOLD_S`(600秒)以内。`tToAosMs` がセットされる。
+- `IDLE` — 次ウィンドウのAOSまでPREP閾値より先。
+- `NO_WINDOW` — 既知の予測期間内にウィンドウが残っていない。
+
+`MissionStore.getContactPhase()` はこれを `getNetWindows()`(`getPassPredictions()` から導出)と `displayNow` から計算し、`TopBar` のNET T−カウントダウンとops checklistの `next-contact` 項目はどちらも同じ `ContactPhaseInfo` を利用します。
+
+## 世界地図の描画
+
+`WorldMap`(`src/components/map/WorldMap.tsx`)は正距円筒図法の世界地図(Natural Earth / world-atlas由来のパブリックドメイン海岸線データ)、昼夜ターミネータ、衛星の可視フットプリント円、過去(実線)/未来(破線)の地上軌跡を描画します。
+
+これらはいずれも日付変更線(±180°)を跨いだり極を周回したりしうる地理的なリング・ポリラインであるため、`src/domain/mapPolygon.ts` が画面座標への投影前に使う純粋なジオメトリヘルパーを提供します。
+
+- `unwrapRing()` — リング内の隣接点同士の経度差が180°を超えないよう経度を書き換え、範囲制限のない(±180°を超えうる)経度列を生成します。これにより、ポリゴンの辺が日付変更線を跨ぐ際にナイーブな正距円筒図法投影が生む水平線状のアーティファクトを回避します。
+- `closeRing()` — 極を周回するリングに対し、極の緯度に2つのキャップ点を追加してリングを正しく閉じます(開いた自己交差形状として描画されるのを防ぐ)。極を周回しないリングはそのまま返します。
+
+これらは `tests/mapPolygon.test.ts` によって描画コードとは独立に直接検証されており、昼夜境界の計算(`src/domain/terminator.ts`)は `tests/terminator.test.ts` で検証されています。
+
 ## SIMULATED / LIVE_READ_ONLY / REPLAY の責務分離
 
 | 項目 | SIMULATED | LIVE_READ_ONLY | REPLAY |
@@ -216,4 +288,4 @@ export interface DataProvenance {
 
 ---
 
-関連ドキュメント: [`README.md`](../README.md) ・ [`safety-and-scope.md`](safety-and-scope.md)
+関連ドキュメント: [`README.md`](../README.md) ・ [`safety-and-scope.md`](safety-and-scope.md) ・ [`control-plane-boundary.md`](control-plane-boundary.md)

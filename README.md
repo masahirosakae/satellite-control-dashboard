@@ -49,11 +49,12 @@
 ## LIVE READ-ONLYの安全設計(要点)
 
 - コマンドコンソールは `createCommandRehearsal()`(`src/domain/commandRehearsal.ts`)のみを呼び出す純粋関数で、`CommandRehearsal` 型の `transmitted` フィールドはリテラル型 `false` — I/Oを一切行わない。
+- Control Plane(`src/services/control/`)はインターフェースと**唯一の実装である無効化アダプタのみ**で構成される。5つの capability フラグはすべてリテラル型 `false` であり、`transmitCommand()` 等の制御メソッドはすべて `CONTROL_PLANE_DISABLED` を投げるだけで何も行わない。
 - SatNOGS APIトークンはBFF(`server/`)内でのみ使用され、ブラウザには一切露出しない(ヘルスチェックは真偽値 `satnogsTokenConfigured` のみ返す)。
 - 実データと仮想データは `isSimulated` フラグ・鮮度チップ・モードバナー("READ-ONLY LIVE DATA · NO UPLINK / NO RF TRANSMISSION / NO SPACECRAFT CONTROL" / "REPLAY OF RECORDED DATA — NOT LIVE")によって常に明示され、混同しない設計。
-- これらはすべて `tests/rehearsal.test.ts`、`tests/server.satnogs.test.ts` 等のテストで検証されている。
+- これらはすべて `tests/rehearsal.test.ts`、`tests/controlPlane.test.ts`、`tests/architecture.test.ts`、`tests/server.satnogs.test.ts` 等のテストで検証されている。
 
-詳細な設計原則・禁止事項の根拠(コードパスが存在しないことの具体的な裏付け)は [`docs/safety-and-scope.md`](docs/safety-and-scope.md) にまとめています。
+詳細な設計原則・禁止事項の根拠(コードパスが存在しないことの具体的な裏付け)は [`docs/safety-and-scope.md`](docs/safety-and-scope.md)、Control Plane境界の詳細は [`docs/control-plane-boundary.md`](docs/control-plane-boundary.md) にまとめています。
 
 ## 実装済み機能
 
@@ -64,17 +65,20 @@
   - 実際の仰角マスク(既定10°)に基づくパス予測(AOS/LOS二分探索精緻化、最大仰角、AOS/LOS方位角、`src/services/orbit/PassPredictionService.ts`)
 
     ![Pass prediction](docs/screenshots/pass-prediction.png)
+  - 複数局のパスをマージしたNETコンタクトウィンドウ(`src/domain/netWindow.ts`)と、`CONTACT` / `PREP` / `IDLE` / `NO_WINDOW` を判定するコンタクトフェーズ(`src/domain/contactPhase.ts`)。TopBarのNET T−カウントダウンと24hパスタイムラインの両方がこの結果を共有
   - SatNOGS Networkの公開観測一覧の取得・表示(`server/routes/satnogs.ts`, `ObservationBrowser`)
 
     ![Observation browser](docs/screenshots/observation-browser.png)
   - SatNOGS DBのデコード済みテレメトリ取得・表示(トークン必須、`LiveTelemetryPanel`)。Known Field Mapping Layer(`src/domain/telemetryMapping.ts`)が正規表現ルールで衛星ごとに異なるデコーダのフィールド名を既知カード(電圧/電流/温度/CPU/信号/ストレージ)にマッピングしつつ、未知フィールドも生データ行として一覧表示。実測フィールドが無いカードは仮想値を表示せず `N/A`。
-  - Command Rehearsal Console — コマンドは `CommandRehearsal` として記録されるのみで送信されない
+  - Command Rehearsal Console — コマンドは `CommandRehearsal` として記録されるのみで送信されない。各エントリは `createdInMode` / `createdAtWallClock`(実時間) / `contextTimestamp`(作成時点のミッション表示時計。REPLAYではリプレイカーソルで実時間とずれ得る)を分離して保持し、LIVE_READ_ONLYとREPLAYは独立した履歴を持つ
   - Provider Health パネルによる各データソースの状態表示(OK/DEGRADED/ERROR/TOKEN_MISSING/IDLE)
 
     ![Provider health](docs/screenshots/provider-health.png)
+  - Operations Checklist と Advisory — 両方とも単一の `OperationalSnapshot`(`src/domain/operationalAssessment.ts`)から導出されるため、内容が食い違うことがない。リクエストがロード中の間は `PENDING`/`CHECKING` を表示し、時期尚早な `FAIL` を出さない。SatNOGSトークン未設定は `FAIL` ではなく `CONFIG_REQUIRED` と表示
+  - TopBarのControl Planeステータスチップ — `CONTROL PLANE: DISABLED` / `REHEARSAL PLANE: LOCAL ONLY — NOT TRANSMITTED` を常時表示するだけの表示専用パーツで、ボタンや設定UIは一切持たない
 - **REPLAY**: `src/fixtures/sonate2-replay.json` に記録された固定の観測・テレメトリ・TLEを、再生/一時停止/倍速切り替え付きで再生(`src/services/providers/ReplayProvider.ts`)
-- **共通**: 地上局のCRUD(`GroundStationEditor`、`localStorage` 永続化、既定局は公開の実在施設4箇所(Uchinoura/Svalbard/Santiago/Fairbanks)のみでユーザー個人情報は初期値に含まない)、イベントログ(`EventLog`)、各パネルのprovenance/freshnessチップ表示、世界地図表示(`WorldMap` — Natural Earth由来の海岸線、昼夜ターミネータ、可視フットプリント円、過去実線/未来破線の地上軌跡)
-- **テスト**: `tests/` に vitest による自動テスト12ファイル・73テスト(TLE正規化 / SGP4ラッパー / パス予測・仰角マスク / 鮮度判定 / テレメトリフィールドマッピング / コマンドリハーサルが外部送信しないことの安全性テスト / Replay fixture / モード切替の非フォールバック / BFF orbitルート(成功・障害・STALEキャッシュ) / BFF SatNOGSルート(トークン欠如・データなし・API失敗・トークン非漏洩) / 球面幾何・フットプリント / 昼夜ターミネータ)。すべて実ネットワークに接続せず、注入したフェイク `fetch` で実行
+- **共通**: 地上局のCRUD(`GroundStationEditor`、`localStorage` 永続化、既定局は公開の実在施設4箇所(Uchinoura/Svalbard/Santiago/Fairbanks)のみでユーザー個人情報は初期値に含まない)、イベントログ(`EventLog`)、各パネルのprovenance/freshnessチップ表示、世界地図表示(`WorldMap` — Natural Earth由来の海岸線、昼夜ターミネータ、可視フットプリント円、過去実線/未来破線の地上軌跡、日付変更線・極付近も破綻しないポリゴン描画)
+- **テスト**: `tests/` に vitest による自動テスト22ファイル・240テスト(TLE正規化 / SGP4ラッパー / パス予測・仰角マスク / 鮮度判定 / テレメトリフィールドマッピング / コマンドリハーサルが外部送信しないことの安全性テスト(両リハーサル対応モード×6種のI/O APIでパラメータ化) / Replay fixture / モード切替の非フォールバック / provider request lifecycle / OperationalSnapshotによるAdvisory・チェックリストの整合性 / Control Planeが構造的に無効であることの保証 / TypeScript ASTベースの依存方向アーキテクチャテスト / BFF orbitルート(成功・障害・STALEキャッシュ) / BFF SatNOGSルート(トークン欠如・データなし・API失敗・トークン非漏洩) / 球面幾何・フットプリント / 昼夜ターミネータ)。すべて実ネットワークに接続せず、注入したフェイク `fetch` 等で実行
 
 ## 明示的に実装していない機能(禁止範囲を含む)
 
@@ -92,6 +96,7 @@
 - **RF送信** — 送信機・アンテナ制御・変調器へのインターフェースは存在しません。
 - **実衛星制御** — 姿勢制御・電源制御・モード切替など、実際の衛星バスやペイロードを操作するコードパスはありません。
 - **地上局の遠隔操作** — 本アプリが地上局のハードウェア(回転台・受信機など)を操作することはありません。地上局情報はブラウザの `localStorage` に保存されるユーザー入力の座標データにすぎません。
+- **実装を持つControl Planeアダプタ** — `src/services/control/` には `DisabledControlPlaneAdapter` という唯一の実装しか存在せず、5つの制御メソッドはすべて例外を投げるだけです。ビルド時フラグ `VITE_CONTROL_PLANE_MODE` によってこれ以外の実装が有効化される経路もありません(詳細は下記)。
 
 ## アーキテクチャ概要
 
@@ -106,6 +111,7 @@ flowchart LR
     Store --> ObsP["SatNogsObservationProvider"]
     Store --> TlmP["SatNogsTelemetryProvider"]
     Store --> RepP["ReplayProvider\n(local fixture JSON)"]
+    Store --> CtrlP["DisabledControlPlaneAdapter\n(services/control/, I/Oなし)"]
   end
   subgraph BFF["Express BFF (server/)"]
     OrbitRoute["/api/orbit/:noradId\n+ TTL cache"]
@@ -118,7 +124,7 @@ flowchart LR
   SatnogsRoute -->|"server-side fetch\n(token header)"| SatNOGS[("SatNOGS\nNetwork / DB")]
 ```
 
-詳細なデータフロー(シーケンス図含む)、鮮度モデル、モードごとの責務分離は [`docs/architecture.md`](docs/architecture.md) を参照してください。
+詳細なデータフロー(シーケンス図含む)、鮮度モデル、モードごとの責務分離は [`docs/architecture.md`](docs/architecture.md)、Control Plane境界の詳細は [`docs/control-plane-boundary.md`](docs/control-plane-boundary.md) を参照してください。
 
 ### ディレクトリ構成
 
@@ -127,24 +133,29 @@ flowchart LR
 ├── src/
 │   ├── app/            # App.tsx — トップレベルレイアウト
 │   ├── components/      # layout/ antenna/ telemetry/ map/ pass/ command/ logs/ mission/
-│   ├── domain/          # 型定義・freshness・commandRehearsal・telemetryMapping・simpleOrbit(純粋関数)
+│   ├── domain/          # 型定義・freshness・commandRehearsal・rehearsalPlane・operationalAssessment・
+│   │                     # opsChecklist・advisory・telemetryMapping・simpleOrbit・mapPolygon 等(純粋関数)
 │   ├── services/
 │   │   ├── api/         # missionApi.ts — BFFへのfetchラッパー
+│   │   ├── control/      # ControlPlane.ts(インターフェース)+ DisabledControlPlane.ts(唯一の実装)
 │   │   ├── orbit/       # Sgp4OrbitEngine, PassPredictionService
 │   │   ├── providers/   # SatelliteDataProvider実装5種
 │   │   └── simulator/    # Simulator.ts — 仮想衛星
-│   ├── store/           # missionStore.ts, groundStations.ts (localStorage)
-│   └── fixtures/         # sonate2-replay.json
+│   ├── store/           # missionStore.ts, useMissionStore.ts, groundStations.ts (localStorage)
+│   ├── fixtures/         # sonate2-replay.json
+│   └── vite-env.d.ts     # VITE_CONTROL_PLANE_MODE のImportMetaEnv型定義
 ├── server/
 │   ├── routes/           # orbit.ts, satnogs.ts
 │   ├── clients/          # celestrak.ts, satnogs.ts (上流API呼び出し)
 │   ├── config.ts, cache.ts, app.ts, index.ts
 ├── shared/               # apiTypes.ts, tle.ts — クライアント/サーバー共有DTO
-├── tests/                # vitest (12ファイル, 73テスト)
+├── tests/                # vitest (22ファイル, 240テスト)
 ├── legacy/               # satellite-mission-control.jsx — プロジェクトの原型(単一ファイルMVP)
 └── docs/
     ├── architecture.md
     ├── safety-and-scope.md
+    ├── control-plane-boundary.md
+    ├── scc-comparison.md
     └── screenshots/
 ```
 
@@ -188,17 +199,24 @@ npm run typecheck
 
 環境変数の詳細(`PORT`, `CELESTRAK_BASE_URL`, `SATNOGS_DB_BASE_URL`, `SATNOGS_NETWORK_BASE_URL`, `SATNOGS_API_TOKEN`, `LIVE_DATA_CACHE_TTL_SECONDS`)は `.env.example` および `server/config.ts` を参照してください。
 
+### `VITE_CONTROL_PLANE_MODE`(任意・クライアントビルド変数)
+
+`parseControlPlaneMode()`(`src/services/control/ControlPlane.ts`)が読むVite ビルド時の任意変数です。**有効化できるものは何一つ存在しません** — 認識されるのは `"disabled"`(大文字小文字・前後空白は無視)のみで、未設定でも同じ扱いになります。それ以外の値(例: `"flight"`, `"enabled"`, `"1"`)を指定しても結果は常に `DISABLED` のままです(無効化アダプタ以外を構築する経路はコード上どこにも存在しません)が、値が認識されなかったことを示す `WARN` `CTRL` イベントがイベントログに記録されるため、設定ミスがサイレントに握りつぶされることはありません。詳細は [`docs/control-plane-boundary.md`](docs/control-plane-boundary.md) を参照してください。
+
 ## テスト
 
 ```bash
 npm test
 ```
 
-`tests/` 配下のvitestスイート(12ファイル・73テスト、すべて実ネットワーク非依存)には、以下のような安全性テストが含まれます。
+`tests/` 配下のvitestスイート(22ファイル・240テスト、すべて実ネットワーク非依存)には、以下のような安全性テストが含まれます。
 
-- `tests/rehearsal.test.ts` — リハーサルコマンドが `fetch` を一切呼び出さないことの検証
+- `tests/rehearsal.test.ts` — リハーサルコマンドが `fetch` を含む6種のI/O APIを一切呼び出さないことの検証(両リハーサル対応モードでパラメータ化)
+- `tests/controlPlane.test.ts` — Control Planeアダプタが型レベル・実行時レベルの両方で構造的に無効であることと、同じネットワーク非到達性の検証
+- `tests/architecture.test.ts` — TypeScript ASTベースで、Control Plane境界の依存方向が破られていないこと、`src/` 配下のどのファイルも `process.env` やSatNOGSトークンを参照していないことを検証
 - `tests/server.satnogs.test.ts` — SatNOGS APIトークンがレスポンスに一切含まれないことの検証
 - `tests/store.modeSwitch.test.ts` — LIVE_READ_ONLYからSIMULATEDへの自動フォールバックが発生しないことの検証
+- `tests/operationalAssessment.test.ts` — 同一スナップショットから導出されるAdvisoryとOperations Checklistが決して食い違わないこと、リクエストがロード中の間はFAIL/CRITICALを一切出さないことの検証
 
 ## 今後のロードマップ
 
