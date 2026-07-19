@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { CelesTrakOrbitProvider } from "../src/services/providers/CelesTrakOrbitProvider";
 import { SatNogsTelemetryProvider } from "../src/services/providers/SatNogsTelemetryProvider";
+import { ReplayProvider, type ReplayFixture } from "../src/services/providers/ReplayProvider";
 import type { MissionApi } from "../src/services/api/missionApi";
 import type { SatelliteProfile } from "../src/domain/types";
 
@@ -150,5 +151,48 @@ describe("SatNogsTelemetryProvider — request lifecycle", () => {
     const h = provider.getProviderHealth();
     expect(h.requestState).toBe("FAILED");
     expect(h.failureReason).toBe("FETCH_FAILED");
+  });
+});
+
+describe("ReplayProvider — request lifecycle (health reflects fixture TLE init)", () => {
+  const VALID_FIXTURE: ReplayFixture = {
+    profile: { name: "SONATE-2", noradId: 59112, purpose: "test" },
+    tle: {
+      line1: "1 59112U 24043AK  26166.50000000  .00012000  00000+0  55000-3 0  9992",
+      line2: "2 59112  97.4500 245.5000 0011000  95.0000 265.2000 15.25000000123450",
+      name: "SONATE-2",
+      noradId: 59112,
+      epoch: "2026-06-15T12:00:00.000Z",
+    },
+    start: "2026-06-15T00:00:00.000Z",
+    end: "2026-06-16T00:00:00.000Z",
+    observations: [],
+    telemetryFrames: [],
+  };
+
+  // Same corruption technique as INVALID_ORBIT_RESP above: eccentricity
+  // field set to 0.9999999 makes satellite.js's twoline2satrec set
+  // satrec.error !== 0, so Sgp4OrbitEngine's constructor throws — and
+  // ReplayProvider's constructor catches that into `initError` / leaves
+  // `this.engine` null.
+  const CORRUPT_FIXTURE: ReplayFixture = {
+    ...VALID_FIXTURE,
+    tle: { ...VALID_FIXTURE.tle, line2: "2 59112  97.4500 245.5000 9999999  95.0000 265.2000 15.25000000123450" },
+  };
+
+  it("reports SUCCEEDED/null when the fixture TLE initializes cleanly", () => {
+    const provider = new ReplayProvider(VALID_FIXTURE);
+    const h = provider.getProviderHealth()[0];
+    expect(h.status).toBe("OK");
+    expect(h.requestState).toBe("SUCCEEDED");
+    expect(h.failureReason).toBeNull();
+  });
+
+  it("reports FAILED/PARSE_FAILED (and status ERROR) when the fixture TLE fails to initialize", () => {
+    const provider = new ReplayProvider(CORRUPT_FIXTURE);
+    const h = provider.getProviderHealth()[0];
+    expect(h.status).toBe("ERROR");
+    expect(h.requestState).toBe("FAILED");
+    expect(h.failureReason).toBe("PARSE_FAILED");
   });
 });

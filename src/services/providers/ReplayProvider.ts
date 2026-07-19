@@ -200,8 +200,8 @@ export class ReplayProvider implements SatelliteDataProvider {
         lastErrorAt: null,
         lastError: this.initError,
         detail: `fixture window ${this.fixture.start} → ${this.fixture.end}`,
-        requestState: "SUCCEEDED",
-        failureReason: null,
+        requestState: this.engine ? "SUCCEEDED" : "FAILED",
+        failureReason: this.engine ? null : "PARSE_FAILED",
       },
     ];
   }
