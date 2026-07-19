@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import type { GeoPoint, OrbitPosition } from "../../domain/types";
-import { destPoint, footprintCircle } from "../../domain/geo";
+import { destPoint, footprintCircle, footprintHalfAngleDeg } from "../../domain/geo";
+import { landPolygons, footprintPolygon } from "../../domain/mapPolygon";
 import { nightPolygon } from "../../domain/terminator";
 import { C, MONO } from "../layout/theme";
 import worldCoastlines from "../../assets/world-110m.json";
@@ -32,6 +33,27 @@ function splitSegments(points: GeoPoint[]): [number, number][][] {
   }
   segs.push(cur);
   return segs;
+}
+
+/**
+ * A projected polygon may extend outside the [0, W] viewBox range when it
+ * came from an unwrapped (unbounded-lon) ring. Since px() maps lon linearly
+ * and one full wrap is exactly W px wide, the polygon is periodic in W: it
+ * repeats every W px. Determine which integer multiples of W it must be
+ * shifted by so at least one copy overlaps the visible [0, W] range.
+ */
+function neededShifts(poly: [number, number][]): number[] {
+  let minX = Infinity;
+  let maxX = -Infinity;
+  for (const [x] of poly) {
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+  }
+  const shifts: number[] = [];
+  for (const s of [-W, 0, W]) {
+    if (minX + s <= W && maxX + s >= 0) shifts.push(s);
+  }
+  return shifts;
 }
 
 export interface MapStation {
@@ -79,8 +101,15 @@ export function WorldMap({
     [trackCacheKey]
   );
 
-  const coastlineSegs = useMemo(
-    () => COASTLINES.map((poly) => poly.map((c) => px({ lon: c[0], lat: c[1] }))),
+  const landPolys = useMemo(() => landPolygons(COASTLINES).map((ring) => ring.map((p) => px(p))), []);
+
+  const landOutlineSegs = useMemo(
+    () =>
+      COASTLINES.map((ring) => {
+        const pts: GeoPoint[] = ring.map((c) => ({ lon: c[0], lat: c[1] }));
+        if (pts.length > 0) pts.push(pts[0]);
+        return splitSegments(pts);
+      }),
     []
   );
 
@@ -89,10 +118,21 @@ export function WorldMap({
     return poly.map((p) => px(p));
   }, [now]);
 
-  const footprintSeg = useMemo(() => {
+  const footprintPoly = useMemo(() => {
     if (!position) return null;
-    const poly = footprintCircle(position, position.altKm);
-    return splitSegments(poly);
+    return footprintPolygon(position, position.altKm).map((p) => px(p));
+  }, [position]);
+
+  const footprintOutlineSegs = useMemo(() => {
+    if (!position) return null;
+    if (Math.abs(position.lat) >= 89.9) {
+      const r = footprintHalfAngleDeg(position.altKm);
+      const lat = position.lat >= 0 ? 90 - r : -90 + r;
+      const pts: GeoPoint[] = [];
+      for (let lon = -180; lon <= 180; lon += 12) pts.push({ lat, lon });
+      return splitSegments(pts);
+    }
+    return splitSegments(footprintCircle(position, position.altKm));
   }, [position]);
 
   const rangeCircle = (gs: MapStation, rangeKm: number) => {
@@ -117,19 +157,51 @@ export function WorldMap({
         <line key={"h" + i} x1={0} y1={(i + 1) * (H / 6)} x2={W} y2={(i + 1) * (H / 6)} stroke="#0f1a2c" strokeWidth="1" />
       ))}
       <line x1={0} y1={H / 2} x2={W} y2={H / 2} stroke="#16233a" strokeWidth="1.2" />
-      {coastlineSegs.map((poly, i) => (
-        <polygon key={i} points={poly.map((p) => p.join(",")).join(" ")} fill="#0d1b2e" stroke="#1e3352" strokeWidth="1" />
-      ))}
+      {landPolys.map((poly, i) =>
+        neededShifts(poly).map((s) => (
+          <polygon
+            key={i + "_" + s}
+            points={poly.map((p) => p.join(",")).join(" ")}
+            transform={"translate(" + s + " 0)"}
+            fill="#0d1b2e"
+            stroke="none"
+          />
+        ))
+      )}
+      {landOutlineSegs.map((segs, i) =>
+        segs.map(
+          (seg, j) =>
+            seg.length > 1 && (
+              <polyline
+                key={i + "_" + j}
+                points={seg.map((p) => p.join(",")).join(" ")}
+                fill="none"
+                stroke="#1e3352"
+                strokeWidth="1"
+              />
+            )
+        )
+      )}
       <polygon points={nightSeg.map((p) => p.join(",")).join(" ")} fill="#000000" opacity="0.1" stroke="none" />
-      {footprintSeg &&
-        footprintSeg.map(
+      {footprintPoly &&
+        neededShifts(footprintPoly).map((s) => (
+          <polygon
+            key={"fp" + s}
+            points={footprintPoly.map((p) => p.join(",")).join(" ")}
+            transform={"translate(" + s + " 0)"}
+            fill={C.cyan}
+            fillOpacity="0.06"
+            stroke="none"
+          />
+        ))}
+      {footprintOutlineSegs &&
+        footprintOutlineSegs.map(
           (seg, i) =>
             seg.length > 1 && (
-              <polygon
-                key={"fp" + i}
+              <polyline
+                key={"fpo" + i}
                 points={seg.map((p) => p.join(",")).join(" ")}
-                fill={C.cyan}
-                fillOpacity="0.06"
+                fill="none"
                 stroke={C.cyan}
                 strokeOpacity="0.35"
                 strokeWidth="1"
