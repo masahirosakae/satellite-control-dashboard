@@ -1,13 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { C, MONO } from "../layout/theme";
+import { filterEvents, normalizeTypeFilter, type DisplayLogEntry } from "./eventLogFilter";
 
-export interface DisplayLogEntry {
-  id: string;
-  time: string;
-  level: "INFO" | "WARN" | "ERROR";
-  type: string;
-  msg: string;
-}
+export type { DisplayLogEntry };
 
 const LEVELS: DisplayLogEntry["level"][] = ["INFO", "WARN", "ERROR"];
 
@@ -18,7 +13,15 @@ export function EventLog({ entries }: { entries: DisplayLogEntry[] }) {
 
   const types = useMemo(() => Array.from(new Set(entries.map((e) => e.type))).sort(), [entries]);
 
-  const filtered = entries.filter((e) => enabledLevels.has(e.level) && (typeFilter === "ALL" || e.type === typeFilter));
+  // Reset the select to ALL when its currently-selected type vanishes
+  // (mode switch, or the 300-entry trim dropping the last entry of a type).
+  useEffect(() => {
+    const normalized = normalizeTypeFilter(typeFilter, types);
+    if (normalized !== typeFilter) setTypeFilter(normalized);
+  }, [types, typeFilter]);
+
+  const filtered = filterEvents(entries, enabledLevels, typeFilter);
+  const allLevelsOff = enabledLevels.size === 0;
 
   const toggleLevel = (level: DisplayLogEntry["level"]) => {
     setEnabledLevels((prev) => {
@@ -28,6 +31,11 @@ export function EventLog({ entries }: { entries: DisplayLogEntry[] }) {
       return next;
     });
   };
+
+  let emptyMessage: string | null = null;
+  if (entries.length === 0) emptyMessage = "No events.";
+  else if (allLevelsOff) emptyMessage = "All levels hidden — enable a level filter.";
+  else if (filtered.length === 0) emptyMessage = "No events match filter.";
 
   return (
     <div className="h-full flex flex-col" style={{ fontFamily: MONO }}>
@@ -41,6 +49,7 @@ export function EventLog({ entries }: { entries: DisplayLogEntry[] }) {
             <button
               key={level}
               onClick={() => toggleLevel(level)}
+              aria-pressed={on}
               className="rounded"
               style={{
                 fontSize: 8.5,
@@ -60,6 +69,7 @@ export function EventLog({ entries }: { entries: DisplayLogEntry[] }) {
         <select
           value={typeFilter}
           onChange={(e) => setTypeFilter(e.target.value)}
+          aria-label="Filter by event type"
           className="rounded outline-none ml-auto"
           style={{
             background: "#050a13",
@@ -79,9 +89,9 @@ export function EventLog({ entries }: { entries: DisplayLogEntry[] }) {
         </select>
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: "4px 8px" }}>
-        {filtered.length === 0 && (
+        {emptyMessage && (
           <div style={{ color: C.dim, fontSize: 10, padding: 8 }}>
-            {entries.length === 0 ? "No events." : "No events match filter."}
+            {emptyMessage}
           </div>
         )}
         {filtered.map((l) => (

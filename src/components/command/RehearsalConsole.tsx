@@ -5,7 +5,7 @@
  */
 import { useEffect, useState } from "react";
 import { COMMANDS } from "../../domain/commandRehearsal";
-import type { RehearsalStatus } from "../../domain/types";
+import type { RehearsalMode, RehearsalStatus } from "../../domain/types";
 import { C, MONO, LBL, fmtIso } from "../layout/theme";
 import type { MissionStore } from "../../store/missionStore";
 
@@ -15,6 +15,31 @@ const STATUS_COLOR: Record<RehearsalStatus, string> = {
   REHEARSAL_EXEC: C.green,
   REHEARSAL_FAIL: C.red,
 };
+
+const MODE_BADGE: Record<RehearsalMode, { color: string }> = {
+  LIVE_READ_ONLY: { color: C.green },
+  REPLAY: { color: C.cyan },
+};
+
+function ModeBadge({ mode }: { mode: RehearsalMode }) {
+  const color = MODE_BADGE[mode].color;
+  return (
+    <span
+      className="rounded border"
+      style={{
+        fontSize: 8,
+        fontWeight: 800,
+        letterSpacing: "0.06em",
+        padding: "1px 5px",
+        color,
+        borderColor: color,
+        background: color + "1a",
+      }}
+    >
+      {mode}
+    </span>
+  );
+}
 
 export function RehearsalConsole({ store }: { store: MissionStore }) {
   const [cmd, setCmd] = useState(COMMANDS[0].name);
@@ -111,24 +136,28 @@ export function RehearsalConsole({ store }: { store: MissionStore }) {
           <thead className="sticky top-0" style={{ background: C.panel2 }}>
             <tr style={{ color: C.dim }}>
               <th className="text-left font-normal" style={{ padding: "4px 8px" }}>ID</th>
-              <th className="text-left font-normal" style={{ padding: "4px 8px" }}>UTC</th>
+              <th className="text-left font-normal" style={{ padding: "4px 8px" }}>MODE</th>
+              <th className="text-left font-normal" style={{ padding: "4px 8px" }}>WALL UTC</th>
+              <th className="text-left font-normal" style={{ padding: "4px 8px" }}>CTX</th>
               <th className="text-left font-normal" style={{ padding: "4px 8px" }}>COMMAND</th>
               <th className="text-left font-normal" style={{ padding: "4px 8px" }}>PARAM</th>
               <th className="text-left font-normal" style={{ padding: "4px 8px" }}>RESULT</th>
             </tr>
           </thead>
           <tbody>
-            {store.rehearsals.length === 0 && (
+            {store.getRehearsals().length === 0 && (
               <tr>
-                <td colSpan={5} className="text-center" style={{ color: C.dim, padding: "12px 8px" }}>
+                <td colSpan={7} className="text-center" style={{ color: C.dim, padding: "12px 8px" }}>
                   No rehearsal commands recorded yet.
                 </td>
               </tr>
             )}
-            {store.rehearsals.map((r) => (
+            {store.getRehearsals().map((r) => (
               <tr key={r.id} style={{ borderTop: "1px solid " + C.line, color: C.text }}>
                 <td style={{ padding: "3px 8px", color: C.violet }}>{r.id}</td>
-                <td style={{ padding: "3px 8px" }}>{fmtIso(r.createdAt)}</td>
+                <td style={{ padding: "3px 8px" }}><ModeBadge mode={r.createdInMode} /></td>
+                <td style={{ padding: "3px 8px" }}>{fmtIso(r.createdAtWallClock)}</td>
+                <td style={{ padding: "3px 8px" }}>{fmtIso(r.contextTimestamp)}</td>
                 <td style={{ padding: "3px 8px" }}>{r.name}</td>
                 <td style={{ padding: "3px 8px", color: C.amber }}>{r.param || "—"}</td>
                 <td style={{ padding: "3px 8px", fontWeight: 700, color: STATUS_COLOR[r.status] }}>

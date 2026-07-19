@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { deriveAdvisories, reconcileAcks } from "../src/domain/advisory";
-import type { DataProvenance, OrbitState, ProviderHealth, TelemetrySnapshot } from "../src/domain/types";
+import type {
+  DataProvenance,
+  MissionMode,
+  OrbitState,
+  ProviderHealth,
+  ProviderRequestState,
+  TelemetrySnapshot,
+} from "../src/domain/types";
 import type { FreshnessStatus } from "../src/domain/types";
 
 function provenance(overrides: Partial<DataProvenance> = {}): DataProvenance {
@@ -53,156 +60,228 @@ function provider(overrides: Partial<ProviderHealth> = {}): ProviderHealth {
     lastErrorAt: null,
     lastError: null,
     detail: null,
+    requestState: "SUCCEEDED",
+    failureReason: null,
     ...overrides,
   };
 }
 
 function baseInput(overrides: Partial<Parameters<typeof deriveAdvisories>[0]> = {}) {
   return {
+    mode: "LIVE_READ_ONLY" as MissionMode,
     orbit: orbit(),
+    orbitRequest: "SUCCEEDED" as ProviderRequestState,
     telemetry: telemetry(),
+    tlmRequest: "SUCCEEDED" as ProviderRequestState,
     health: [],
     ...overrides,
   };
 }
 
-describe("deriveAdvisories", () => {
-  it("fires orbit-stale WARN when orbit freshness is STALE", () => {
-    const advisories = deriveAdvisories(baseInput({ orbit: orbit({ provenance: provenance({ freshness: "STALE" }) }) }));
-    const a = advisories.find((x) => x.id === "orbit-stale");
+describe("deriveAdvisories — request-lifecycle gating", () => {
+  it.each(["NOT_REQUESTED", "LOADING"] as ProviderRequestState[])(
+    "emits nothing for orbit when orbitRequest is %s, even with UNAVAILABLE freshness",
+    (state) => {
+      const advisories = deriveAdvisories(
+        baseInput({ orbit: orbit({ provenance: provenance({ freshness: "UNAVAILABLE" }) }), orbitRequest: state })
+      );
+      expect(advisories.filter((a) => a.id.includes(":orbit:"))).toHaveLength(0);
+    }
+  );
+
+  it.each(["NOT_REQUESTED", "LOADING"] as ProviderRequestState[])(
+    "emits nothing for telemetry when tlmRequest is %s, even with UNAVAILABLE status",
+    (state) => {
+      const advisories = deriveAdvisories(
+        baseInput({ telemetry: telemetry({ status: "UNAVAILABLE" }), tlmRequest: state })
+      );
+      expect(advisories.filter((a) => a.id.includes(":tlm:"))).toHaveLength(0);
+    }
+  );
+});
+
+describe("deriveAdvisories — orbit", () => {
+  it("fires :orbit:stale WARN when orbitRequest SUCCEEDED and freshness STALE", () => {
+    const advisories = deriveAdvisories(
+      baseInput({ orbit: orbit({ provenance: provenance({ freshness: "STALE" }) }), orbitRequest: "SUCCEEDED" })
+    );
+    const a = advisories.find((x) => x.id === "LIVE_READ_ONLY:orbit:stale");
     expect(a).toBeDefined();
     expect(a!.severity).toBe("WARN");
   });
 
-  it("fires orbit-unavailable CRITICAL when orbit freshness is UNAVAILABLE", () => {
-    const advisories = deriveAdvisories(baseInput({ orbit: orbit({ provenance: provenance({ freshness: "UNAVAILABLE" }) }) }));
-    const a = advisories.find((x) => x.id === "orbit-unavailable");
+  it("fires CRITICAL orbit advisory with default fetch-failed reason when orbitRequest FAILED and no health entry", () => {
+    const advisories = deriveAdvisories(baseInput({ orbitRequest: "FAILED" }));
+    const a = advisories.find((x) => x.id === "LIVE_READ_ONLY:orbit:fetch-failed");
+    expect(a).toBeDefined();
+    expect(a!.severity).toBe("CRITICAL");
+  });
+
+  it("fires CRITICAL orbit advisory with parse-failed reason when celestrak-orbit health says PARSE_FAILED", () => {
+    const advisories = deriveAdvisories(
+      baseInput({
+        orbitRequest: "FAILED",
+        health: [
+          provider({ providerId: "celestrak-orbit", requestState: "FAILED", status: "ERROR", failureReason: "PARSE_FAILED" }),
+        ],
+      })
+    );
+    const a = advisories.find((x) => x.id === "LIVE_READ_ONLY:orbit:parse-failed");
     expect(a).toBeDefined();
     expect(a!.severity).toBe("CRITICAL");
   });
 
   it.each(["LIVE", "DELAYED", "SIMULATED", "REPLAY"] as FreshnessStatus[])(
-    "does not fire any orbit advisory for freshness %s",
+    "does not fire any orbit advisory for SUCCEEDED + freshness %s",
     (freshness) => {
-      const advisories = deriveAdvisories(baseInput({ orbit: orbit({ provenance: provenance({ freshness }) }) }));
-      expect(advisories.find((x) => x.id === "orbit-stale")).toBeUndefined();
-      expect(advisories.find((x) => x.id === "orbit-unavailable")).toBeUndefined();
+      const advisories = deriveAdvisories(
+        baseInput({ orbit: orbit({ provenance: provenance({ freshness }) }), orbitRequest: "SUCCEEDED" })
+      );
+      expect(advisories.filter((a) => a.id.includes(":orbit:"))).toHaveLength(0);
     }
   );
 
-  it("fires tlm-stale WARN when telemetry freshness is STALE (status OK)", () => {
+  it("does not fire an orbit advisory for SUCCEEDED + UNAVAILABLE (defensive)", () => {
     const advisories = deriveAdvisories(
-      baseInput({ telemetry: telemetry({ provenance: provenance({ freshness: "STALE" }), status: "OK" }) })
+      baseInput({ orbit: orbit({ provenance: provenance({ freshness: "UNAVAILABLE" }) }), orbitRequest: "SUCCEEDED" })
     );
-    const a = advisories.find((x) => x.id === "tlm-stale");
-    expect(a).toBeDefined();
-    expect(a!.severity).toBe("WARN");
+    expect(advisories.filter((a) => a.id.includes(":orbit:"))).toHaveLength(0);
+  });
+});
+
+describe("deriveAdvisories — telemetry", () => {
+  it("does not fire for SUCCEEDED + NO_DATA (not critical)", () => {
+    const advisories = deriveAdvisories(baseInput({ telemetry: telemetry({ status: "NO_DATA" }) }));
+    expect(advisories.filter((a) => a.id.includes(":tlm:"))).toHaveLength(0);
   });
 
-  it.each(["LIVE", "DELAYED", "SIMULATED", "REPLAY"] as FreshnessStatus[])(
-    "does not fire tlm-stale for freshness %s",
-    (freshness) => {
-      const advisories = deriveAdvisories(baseInput({ telemetry: telemetry({ provenance: provenance({ freshness }) }) }));
-      expect(advisories.find((x) => x.id === "tlm-stale")).toBeUndefined();
-    }
-  );
-
-  it("fires tlm-token-missing WARN with a token explanation", () => {
+  it("fires :tlm:token-missing WARN (not CRITICAL) for SUCCEEDED + TOKEN_MISSING", () => {
     const advisories = deriveAdvisories(baseInput({ telemetry: telemetry({ status: "TOKEN_MISSING" }) }));
-    const a = advisories.find((x) => x.id === "tlm-token-missing");
+    const a = advisories.find((x) => x.id === "LIVE_READ_ONLY:tlm:token-missing");
     expect(a).toBeDefined();
     expect(a!.severity).toBe("WARN");
-    expect(a!.detail.toLowerCase()).toContain("token");
   });
 
-  it("fires tlm-error CRITICAL including the error message", () => {
+  it("fires :tlm:error CRITICAL for SUCCEEDED + ERROR", () => {
     const advisories = deriveAdvisories(baseInput({ telemetry: telemetry({ status: "ERROR", error: "decode failure" }) }));
-    const a = advisories.find((x) => x.id === "tlm-error");
+    const a = advisories.find((x) => x.id === "LIVE_READ_ONLY:tlm:error");
     expect(a).toBeDefined();
     expect(a!.severity).toBe("CRITICAL");
     expect(a!.detail).toContain("decode failure");
   });
 
-  it("fires tlm-unavailable CRITICAL", () => {
-    const advisories = deriveAdvisories(baseInput({ telemetry: telemetry({ status: "UNAVAILABLE" }) }));
-    const a = advisories.find((x) => x.id === "tlm-unavailable");
-    expect(a).toBeDefined();
-    expect(a!.severity).toBe("CRITICAL");
-  });
-
-  it("suppresses tlm-stale when telemetry.status already produced tlm-unavailable", () => {
+  it("fires :tlm:stale WARN for SUCCEEDED + OK + STALE freshness", () => {
     const advisories = deriveAdvisories(
-      baseInput({ telemetry: telemetry({ status: "UNAVAILABLE", provenance: provenance({ freshness: "STALE" }) }) })
+      baseInput({ telemetry: telemetry({ status: "OK", provenance: provenance({ freshness: "STALE" }) }) })
     );
-    expect(advisories.find((x) => x.id === "tlm-unavailable")).toBeDefined();
-    expect(advisories.find((x) => x.id === "tlm-stale")).toBeUndefined();
-  });
-
-  it("fires provider-error:<id> CRITICAL including lastError", () => {
-    const advisories = deriveAdvisories(
-      baseInput({ health: [provider({ providerId: "celestrak", label: "CelesTrak", status: "ERROR", lastError: "timeout" })] })
-    );
-    const a = advisories.find((x) => x.id === "provider-error:celestrak");
-    expect(a).toBeDefined();
-    expect(a!.severity).toBe("CRITICAL");
-    expect(a!.detail).toContain("timeout");
-  });
-
-  it("fires provider-token:<id> WARN", () => {
-    const advisories = deriveAdvisories(
-      baseInput({ health: [provider({ providerId: "satnogs", label: "SatNOGS", status: "TOKEN_MISSING" })] })
-    );
-    const a = advisories.find((x) => x.id === "provider-token:satnogs");
+    const a = advisories.find((x) => x.id === "LIVE_READ_ONLY:tlm:stale");
     expect(a).toBeDefined();
     expect(a!.severity).toBe("WARN");
   });
 
-  it("does not fire provider advisories for OK/DEGRADED/IDLE providers", () => {
+  it("fires :tlm:fetch-failed CRITICAL when tlmRequest FAILED", () => {
+    const advisories = deriveAdvisories(baseInput({ tlmRequest: "FAILED" }));
+    const a = advisories.find((x) => x.id === "LIVE_READ_ONLY:tlm:fetch-failed");
+    expect(a).toBeDefined();
+    expect(a!.severity).toBe("CRITICAL");
+  });
+});
+
+describe("deriveAdvisories — provider dedup", () => {
+  it("suppresses celestrak-orbit provider advisory when the orbit data-product advisory already fired", () => {
     const advisories = deriveAdvisories(
       baseInput({
+        orbitRequest: "FAILED",
         health: [
-          provider({ providerId: "a", status: "OK" }),
-          provider({ providerId: "b", status: "DEGRADED" }),
-          provider({ providerId: "c", status: "IDLE" }),
+          provider({ providerId: "celestrak-orbit", requestState: "FAILED", status: "ERROR", lastError: "timeout" }),
         ],
       })
     );
-    expect(advisories).toHaveLength(0);
+    const providerAdvisories = advisories.filter((a) => a.id.includes(":provider:celestrak-orbit:"));
+    expect(providerAdvisories).toHaveLength(0);
+    // the orbit-domain advisory still fired exactly once
+    expect(advisories.filter((a) => a.id.includes(":orbit:"))).toHaveLength(1);
   });
 
-  it("orders CRITICAL advisories before WARN advisories", () => {
+  it("always fires satnogs-observations provider advisory (no data-product mapping)", () => {
     const advisories = deriveAdvisories(
       baseInput({
-        orbit: orbit({ provenance: provenance({ freshness: "STALE" }) }), // WARN
-        telemetry: telemetry({ status: "ERROR", error: "boom" }), // CRITICAL
-        health: [provider({ providerId: "x", status: "TOKEN_MISSING" })], // WARN
+        health: [
+          provider({ providerId: "satnogs-observations", requestState: "FAILED", status: "ERROR", lastError: "timeout" }),
+        ],
       })
     );
-    expect(advisories.length).toBeGreaterThanOrEqual(3);
-    const firstWarnIndex = advisories.findIndex((a) => a.severity === "WARN");
-    const lastCriticalIndex =
-      advisories.length - 1 - [...advisories].reverse().findIndex((a) => a.severity === "CRITICAL");
-    expect(lastCriticalIndex).toBeLessThan(firstWarnIndex);
+    const a = advisories.find((x) => x.id === "LIVE_READ_ONLY:provider:satnogs-observations:error");
+    expect(a).toBeDefined();
+    expect(a!.severity).toBe("CRITICAL");
   });
 
-  it("produces a full advisory set with correct id/severity for every condition simultaneously", () => {
-    const advisories = deriveAdvisories({
-      orbit: orbit({ provenance: provenance({ freshness: "UNAVAILABLE" }) }),
-      telemetry: telemetry({ status: "TOKEN_MISSING" }),
+  it("fires satnogs-telemetry provider TOKEN_MISSING WARN when not deduped by a tlm data-product advisory", () => {
+    const advisories = deriveAdvisories(
+      baseInput({
+        tlmRequest: "SUCCEEDED",
+        telemetry: telemetry({ status: "OK" }),
+        health: [
+          provider({ providerId: "satnogs-telemetry", requestState: "FAILED", status: "TOKEN_MISSING" }),
+        ],
+      })
+    );
+    const a = advisories.find((x) => x.id === "LIVE_READ_ONLY:provider:satnogs-telemetry:token-missing");
+    expect(a).toBeDefined();
+    expect(a!.severity).toBe("WARN");
+  });
+
+  it("does not fire provider advisories when requestState is not FAILED", () => {
+    const advisories = deriveAdvisories(
+      baseInput({
+        health: [
+          provider({ providerId: "a", requestState: "SUCCEEDED", status: "OK" }),
+          provider({ providerId: "b", requestState: "SUCCEEDED", status: "DEGRADED" }),
+          provider({ providerId: "c", requestState: "NOT_REQUESTED", status: "IDLE" }),
+        ],
+      })
+    );
+    expect(advisories.filter((a) => a.id.includes(":provider:"))).toHaveLength(0);
+  });
+});
+
+describe("deriveAdvisories — mode isolation via ids", () => {
+  it("produces different ids for the identical condition in different modes", () => {
+    const live = deriveAdvisories(baseInput({ mode: "LIVE_READ_ONLY", orbitRequest: "FAILED" }));
+    const replay = deriveAdvisories(baseInput({ mode: "REPLAY", orbitRequest: "FAILED" }));
+    const liveIds = new Set(live.map((a) => a.id));
+    const replayIds = new Set(replay.map((a) => a.id));
+    for (const id of liveIds) expect(replayIds.has(id)).toBe(false);
+    expect(live.find((a) => a.id === "LIVE_READ_ONLY:orbit:fetch-failed")).toBeDefined();
+    expect(replay.find((a) => a.id === "REPLAY:orbit:fetch-failed")).toBeDefined();
+  });
+});
+
+describe("deriveAdvisories — sorting", () => {
+  it("orders CRITICAL before WARN, ties broken by id (localeCompare en), stable across repeated calls", () => {
+    const input = baseInput({
+      orbit: orbit({ provenance: provenance({ freshness: "STALE" }) }), // WARN orbit:stale
+      telemetry: telemetry({ status: "ERROR", error: "boom" }), // CRITICAL tlm:error
       health: [
-        provider({ providerId: "p1", label: "P1", status: "ERROR", lastError: "net down" }),
-        provider({ providerId: "p2", label: "P2", status: "TOKEN_MISSING" }),
+        provider({ providerId: "x", requestState: "FAILED", status: "TOKEN_MISSING" }), // WARN
+        provider({ providerId: "y", requestState: "FAILED", status: "ERROR", lastError: "down" }), // CRITICAL
       ],
     });
-    const byId = new Map(advisories.map((a) => [a.id, a]));
-    expect(byId.get("orbit-unavailable")?.severity).toBe("CRITICAL");
-    expect(byId.get("tlm-token-missing")?.severity).toBe("WARN");
-    expect(byId.get("provider-error:p1")?.severity).toBe("CRITICAL");
-    expect(byId.get("provider-token:p2")?.severity).toBe("WARN");
-    // CRITICAL-first overall ordering
-    const severities = advisories.map((a) => a.severity);
+    const run1 = deriveAdvisories(input);
+    const run2 = deriveAdvisories(input);
+    expect(run1.map((a) => a.id)).toEqual(run2.map((a) => a.id));
+
+    const severities = run1.map((a) => a.severity);
     const firstWarn = severities.indexOf("WARN");
     expect(severities.slice(0, firstWarn).every((s) => s === "CRITICAL")).toBe(true);
+
+    const criticalIds = run1.filter((a) => a.severity === "CRITICAL").map((a) => a.id);
+    const sortedCritical = [...criticalIds].sort((a, b) => a.localeCompare(b, "en"));
+    expect(criticalIds).toEqual(sortedCritical);
+
+    const warnIds = run1.filter((a) => a.severity === "WARN").map((a) => a.id);
+    const sortedWarn = [...warnIds].sort((a, b) => a.localeCompare(b, "en"));
+    expect(warnIds).toEqual(sortedWarn);
   });
 });
 
@@ -227,5 +306,28 @@ describe("reconcileAcks", () => {
 
   it("returns an empty set when nothing was acked", () => {
     expect(reconcileAcks(new Set(), ["a", "b"]).size).toBe(0);
+  });
+});
+
+describe("MissionStore.getAdvisories / ackAdvisory (store-level ack semantics)", () => {
+  it("getAdvisories() does not mutate the ack set — repeated calls are stable", async () => {
+    const { MissionStore } = await import("../src/store/missionStore");
+    const store = new MissionStore();
+    const before = store.getAdvisories();
+    const after = store.getAdvisories();
+    expect(before.active.map((a) => a.id)).toEqual(after.active.map((a) => a.id));
+    expect(before.acked).toHaveLength(0);
+    expect(after.acked).toHaveLength(0);
+  });
+
+  it("ackAdvisory('nonexistent') adds nothing and logs nothing", async () => {
+    const { MissionStore } = await import("../src/store/missionStore");
+    const store = new MissionStore();
+    const eventsBefore = store.events.length;
+    store.ackAdvisory("nonexistent-advisory-id");
+    expect(store.events.length).toBe(eventsBefore);
+    const { active, acked } = store.getAdvisories();
+    expect(acked).toHaveLength(0);
+    expect(active.find((a) => a.id === "nonexistent-advisory-id")).toBeUndefined();
   });
 });

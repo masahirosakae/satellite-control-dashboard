@@ -3,7 +3,7 @@
  * Field names are decoder-specific — everything goes through the Known
  * Field Mapping Layer, unmapped fields are preserved and shown as-is.
  */
-import type { ProviderHealth, TelemetrySnapshot } from "../../domain/types";
+import type { ProviderHealth, ProviderRequestState, TelemetrySnapshot } from "../../domain/types";
 import type { TelemetryApiResponse, TelemetryEntryDto } from "../../../shared/apiTypes";
 import { telemetryFreshness } from "../../domain/freshness";
 import { mapTelemetryFields } from "../../domain/telemetryMapping";
@@ -20,6 +20,8 @@ export class SatNogsTelemetryProvider {
   private lastErrorAt: string | null = null;
   private lastSuccessAt: string | null = null;
   private tokenMissingLogged = false;
+  private requestState: ProviderRequestState = "NOT_REQUESTED";
+  private failureReason: "FETCH_FAILED" | "PARSE_FAILED" | null = null;
 
   constructor(
     private api: MissionApi,
@@ -28,6 +30,7 @@ export class SatNogsTelemetryProvider {
   ) {}
 
   async refresh(now: Date): Promise<void> {
+    this.requestState = "LOADING";
     try {
       const resp = await this.api.getTelemetry(this.noradId);
       this.resp = resp;
@@ -37,13 +40,19 @@ export class SatNogsTelemetryProvider {
           this.tokenMissingLogged = true;
         }
         this.lastError = null;
+        this.requestState = "SUCCEEDED";
+        this.failureReason = null;
       } else if (resp.status === "ERROR") {
         this.lastError = resp.error ?? "SatNOGS DB error";
         this.lastErrorAt = now.toISOString();
+        this.requestState = "FAILED";
+        this.failureReason = "FETCH_FAILED";
         this.onEvent("ERROR", "TLM", `provider request failed — ${this.lastError}`);
       } else {
         this.lastError = null;
         this.lastSuccessAt = now.toISOString();
+        this.requestState = "SUCCEEDED";
+        this.failureReason = null;
         this.onEvent(
           "INFO",
           "TLM",
@@ -55,6 +64,8 @@ export class SatNogsTelemetryProvider {
     } catch (e) {
       this.lastError = e instanceof Error ? e.message : "telemetry fetch failed";
       this.lastErrorAt = now.toISOString();
+      this.requestState = "FAILED";
+      this.failureReason = "FETCH_FAILED";
       this.onEvent("ERROR", "TLM", `provider request failed — ${this.lastError}`);
     }
   }
@@ -140,6 +151,8 @@ export class SatNogsTelemetryProvider {
           : this.resp?.status === "NO_DATA"
             ? "no decoded frames available"
             : null,
+      requestState: this.requestState,
+      failureReason: this.failureReason,
     };
   }
 }

@@ -158,16 +158,28 @@ export interface TelemetrySeries {
  */
 export type RehearsalStatus = "CREATED" | "REHEARSAL_ACK" | "REHEARSAL_EXEC" | "REHEARSAL_FAIL";
 
+/** The two mission modes that support command rehearsal (SIMULATED does not). */
+export type RehearsalMode = "LIVE_READ_ONLY" | "REPLAY";
+
 /**
  * A command rehearsal entry. `transmitted` is typed as literal `false`:
  * this application NEVER transmits commands to a real spacecraft.
+ *
+ * `createdAtWallClock` and `contextTimestamp` are deliberately separate
+ * fields and must never be merged: the wall clock is when the operator
+ * created the rehearsal (real time); the context timestamp is the mission
+ * display clock at that moment (LIVE: wall clock; REPLAY: replay cursor),
+ * which may differ substantially from wall clock in REPLAY.
  */
 export interface CommandRehearsal {
   id: string;
   name: string;
   param: string | null;
-  createdAt: string;
-  mode: MissionMode;
+  createdInMode: RehearsalMode;
+  /** ISO-8601 UTC wall clock at creation. */
+  createdAtWallClock: string;
+  /** ISO-8601 UTC mission display clock (LIVE) / replay cursor (REPLAY) at creation. */
+  contextTimestamp: string;
   transmitted: false;
   note: string;
   status: RehearsalStatus;
@@ -175,6 +187,17 @@ export interface CommandRehearsal {
 }
 
 export type ProviderStatus = "OK" | "DEGRADED" | "ERROR" | "TOKEN_MISSING" | "IDLE";
+
+/** Lifecycle of the most recent refresh() request against a live provider. */
+export type ProviderRequestState = "NOT_REQUESTED" | "LOADING" | "SUCCEEDED" | "FAILED";
+
+/** Why a data product could not be produced, distinct from provider transport failures. */
+export type DataAvailabilityReason =
+  | "AVAILABLE"
+  | "NO_DATA"
+  | "TOKEN_MISSING"
+  | "FETCH_FAILED"
+  | "PARSE_FAILED";
 
 export interface ProviderHealth {
   providerId: string;
@@ -184,6 +207,8 @@ export interface ProviderHealth {
   lastErrorAt: string | null;
   lastError: string | null;
   detail: string | null;
+  requestState: ProviderRequestState;
+  failureReason: "FETCH_FAILED" | "PARSE_FAILED" | null;
 }
 
 export interface EventLogEntry {

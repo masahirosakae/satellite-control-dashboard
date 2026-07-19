@@ -124,6 +124,8 @@ export class SimulatorProvider implements SatelliteDataProvider {
         lastErrorAt: null,
         lastError: null,
         detail: `sim time ×${this.sim.speed}, ${this.sim.running ? "running" : "paused"}`,
+        requestState: "SUCCEEDED",
+        failureReason: null,
       },
     ];
   }

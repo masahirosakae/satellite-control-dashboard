@@ -63,6 +63,8 @@ function provider(overrides: Partial<ProviderHealth> = {}): ProviderHealth {
     lastErrorAt: null,
     lastError: null,
     detail: null,
+    requestState: "SUCCEEDED",
+    failureReason: null,
     ...overrides,
   };
 }

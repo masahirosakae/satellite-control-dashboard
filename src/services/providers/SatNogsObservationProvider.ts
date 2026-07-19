@@ -1,7 +1,7 @@
 /**
  * Read-only public observation metadata from SatNOGS Network (via BFF).
  */
-import type { Observation, ObservationSet, ProviderHealth } from "../../domain/types";
+import type { Observation, ObservationSet, ProviderHealth, ProviderRequestState } from "../../domain/types";
 import type { ObservationsApiResponse } from "../../../shared/apiTypes";
 import type { MissionApi } from "../api/missionApi";
 import type { ProviderEventSink } from "./CelesTrakOrbitProvider";
@@ -15,6 +15,8 @@ export class SatNogsObservationProvider {
   private lastError: string | null = null;
   private lastErrorAt: string | null = null;
   private lastSuccessAt: string | null = null;
+  private requestState: ProviderRequestState = "NOT_REQUESTED";
+  private failureReason: "FETCH_FAILED" | "PARSE_FAILED" | null = null;
 
   constructor(
     private api: MissionApi,
@@ -23,16 +25,21 @@ export class SatNogsObservationProvider {
   ) {}
 
   async refresh(now: Date): Promise<void> {
+    this.requestState = "LOADING";
     try {
       const resp = await this.api.getObservations(this.noradId);
       this.resp = resp;
       if (resp.status === "ERROR") {
         this.lastError = resp.error ?? "SatNOGS Network error";
         this.lastErrorAt = now.toISOString();
+        this.requestState = "FAILED";
+        this.failureReason = "FETCH_FAILED";
         this.onEvent("ERROR", "OBS", `provider request failed — ${this.lastError}`);
       } else {
         this.lastError = null;
         this.lastSuccessAt = now.toISOString();
+        this.requestState = "SUCCEEDED";
+        this.failureReason = null;
         this.onEvent(
           "INFO",
           "OBS",
@@ -44,6 +51,8 @@ export class SatNogsObservationProvider {
     } catch (e) {
       this.lastError = e instanceof Error ? e.message : "observations fetch failed";
       this.lastErrorAt = now.toISOString();
+      this.requestState = "FAILED";
+      this.failureReason = "FETCH_FAILED";
       this.onEvent("ERROR", "OBS", `provider request failed — ${this.lastError}`);
     }
   }
@@ -98,6 +107,8 @@ export class SatNogsObservationProvider {
       lastErrorAt: this.lastErrorAt,
       lastError: this.lastError,
       detail: this.resp?.status === "NO_DATA" ? "no observations available" : null,
+      requestState: this.requestState,
+      failureReason: this.failureReason,
     };
   }
 }

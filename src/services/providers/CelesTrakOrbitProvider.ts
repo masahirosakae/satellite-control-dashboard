@@ -9,6 +9,7 @@ import type {
   OrbitState,
   PassPrediction,
   ProviderHealth,
+  ProviderRequestState,
   SatelliteProfile,
   TelemetrySnapshot,
 } from "../../domain/types";
@@ -34,6 +35,8 @@ export class CelesTrakOrbitProvider implements SatelliteDataProvider {
   private lastErrorAt: string | null = null;
   private lastSuccessAt: string | null = null;
   private wasStaleCache = false;
+  private requestState: ProviderRequestState = "NOT_REQUESTED";
+  private failureReason: "FETCH_FAILED" | "PARSE_FAILED" | null = null;
 
   private trackCache: { atMs: number; startMs: number; stepS: number; points: { lat: number; lon: number }[] } | null =
     null;
@@ -52,8 +55,21 @@ export class CelesTrakOrbitProvider implements SatelliteDataProvider {
   async refresh(now: Date): Promise<void> {
     const noradId = this.profile.noradId;
     if (noradId === null) return;
+    this.requestState = "LOADING";
+    let resp;
     try {
-      const resp = await this.api.getOrbit(noradId);
+      resp = await this.api.getOrbit(noradId);
+    } catch (e) {
+      this.lastError = e instanceof Error ? e.message : "orbit fetch failed";
+      this.lastErrorAt = now.toISOString();
+      this.requestState = "FAILED";
+      this.failureReason = "FETCH_FAILED";
+      this.onEvent("ERROR", "ORBIT", `provider request failed — ${this.lastError}`);
+      // Keep any previously loaded engine so the UI can show STALE real
+      // data. We never substitute simulated data here.
+      return;
+    }
+    try {
       const engine = new Sgp4OrbitEngine(resp.tleLine1, resp.tleLine2);
       const tleChanged = this.resp?.tleLine1 !== resp.tleLine1;
       this.resp = resp;
@@ -73,12 +89,14 @@ export class CelesTrakOrbitProvider implements SatelliteDataProvider {
         this.onEvent("WARN", "ORBIT", `orbit data stale — TLE epoch age ${(ageHours(resp.epoch, now) ?? 0).toFixed(1)}h`);
       }
       this.lastError = null;
+      this.requestState = "SUCCEEDED";
+      this.failureReason = null;
     } catch (e) {
-      this.lastError = e instanceof Error ? e.message : "orbit fetch failed";
+      this.lastError = e instanceof Error ? e.message : "orbit TLE parse failed";
       this.lastErrorAt = now.toISOString();
+      this.requestState = "FAILED";
+      this.failureReason = "PARSE_FAILED";
       this.onEvent("ERROR", "ORBIT", `provider request failed — ${this.lastError}`);
-      // Keep any previously loaded engine so the UI can show STALE real
-      // data. We never substitute simulated data here.
     }
   }
 
@@ -191,6 +209,8 @@ export class CelesTrakOrbitProvider implements SatelliteDataProvider {
         lastErrorAt: this.lastErrorAt,
         lastError: this.lastError,
         detail: this.wasStaleCache ? "serving stale cached TLE" : null,
+        requestState: this.requestState,
+        failureReason: this.failureReason,
       },
     ];
   }

@@ -17,10 +17,12 @@ import type {
   OrbitState,
   PassPrediction,
   ProviderHealth,
+  ProviderRequestState,
+  RehearsalMode,
   SatelliteProfile,
   TelemetrySnapshot,
 } from "../domain/types";
-import { createCommandRehearsal, rehearsalTransition } from "../domain/commandRehearsal";
+import { advanceRehearsal, assertNotTransmitted, createCommandRehearsal } from "../domain/commandRehearsal";
 import { mergeNetWindows, type NetWindow, type PassInterval } from "../domain/netWindow";
 import { contactPhaseAt, type ContactPhaseInfo } from "../domain/contactPhase";
 import { deriveAdvisories, reconcileAcks, type Advisory } from "../domain/advisory";
@@ -59,10 +61,13 @@ export class MissionStore {
   replaySpeed = 60;
   replayMs: number;
 
-  rehearsals: CommandRehearsal[] = [];
   events: EventLogEntry[] = [];
   version = 0;
 
+  private rehearsalHistories: Record<RehearsalMode, CommandRehearsal[]> = {
+    LIVE_READ_ONLY: [],
+    REPLAY: [],
+  };
   private rehearsalSeq = 0;
   private eventSeq = 0;
   private listeners = new Set<() => void>();
@@ -123,27 +128,42 @@ export class MissionStore {
       void this.refreshLiveIfDue();
     }
     this.tickRehearsals();
+    this.ackedAdvisoryIds = reconcileAcks(this.ackedAdvisoryIds, this.computeAdvisories().map((a) => a.id));
     this.notify();
   }
 
   /**
    * Advance the rehearsal lifecycle (CREATED -> REHEARSAL_ACK ->
-   * REHEARSAL_EXEC | REHEARSAL_FAIL) for every non-terminal rehearsal,
-   * driven purely by wall-clock elapsed time — runs in all modes, since
-   * rehearsals are wall-clock artifacts independent of the mission clock.
+   * REHEARSAL_EXEC | REHEARSAL_FAIL) for every non-terminal rehearsal in
+   * BOTH mode histories, driven purely by wall-clock elapsed time — runs
+   * regardless of the current mode, since rehearsals are wall-clock
+   * artifacts independent of the mission clock. Only the timer (tick())
+   * drives this; there is no other trigger.
    */
   private tickRehearsals(): void {
-    if (this.rehearsals.length === 0) return;
     const nowMs = Date.now();
-    this.rehearsals = this.rehearsals.map((r) => {
-      if (r.status !== "CREATED" && r.status !== "REHEARSAL_ACK") return r;
-      const elapsedMs = nowMs - Date.parse(r.createdAt);
-      const roll = this.rehearsalRolls.get(r.id) ?? 0;
-      const transition = rehearsalTransition(r.status, elapsedMs, roll, r.id);
-      if (!transition) return r;
-      this.logEvent(transition.status === "REHEARSAL_FAIL" ? "WARN" : "INFO", "RHRSL", transition.logMessage);
-      return { ...r, status: transition.status, failReason: transition.failReason };
-    });
+    for (const mode of Object.keys(this.rehearsalHistories) as RehearsalMode[]) {
+      const history = this.rehearsalHistories[mode];
+      if (history.length === 0) continue;
+      this.rehearsalHistories[mode] = history.map((r) => {
+        if (r.status !== "CREATED" && r.status !== "REHEARSAL_ACK") return r;
+        const elapsedMs = nowMs - Date.parse(r.createdAtWallClock);
+        const roll = this.rehearsalRolls.get(r.id) ?? 0;
+        const advance = advanceRehearsal(r.status, elapsedMs, roll, r.id, r.createdInMode, r.contextTimestamp);
+        if (!advance) return r;
+        // Only the LAST message (the one reflecting the final resulting
+        // status) is WARN when that status is REHEARSAL_FAIL. Any earlier
+        // message in the same call (e.g. the intermediate ACK, when a
+        // CREATED rehearsal jumps straight to terminal in one tick) is
+        // always INFO — it never itself represents a failure.
+        const lastIndex = advance.logMessages.length - 1;
+        advance.logMessages.forEach((msg, i) => {
+          const level = i === lastIndex && advance.status === "REHEARSAL_FAIL" ? "WARN" : "INFO";
+          this.logEvent(level, "RHRSL", msg);
+        });
+        return Object.freeze({ ...r, status: advance.status, failReason: advance.failReason });
+      });
+    }
   }
 
   private async refreshLiveIfDue(): Promise<void> {
@@ -251,19 +271,35 @@ export class MissionStore {
     ];
   }
 
-  getAdvisories(): { active: Advisory[]; acked: Advisory[] } {
-    const advisories = deriveAdvisories({
+  /** Pure assembly of the current advisory set — no state mutation. */
+  private computeAdvisories(): Advisory[] {
+    const orbitRequest: ProviderRequestState =
+      this.mode === "LIVE_READ_ONLY"
+        ? this.liveOrbit.getProviderHealth()[0]?.requestState ?? "NOT_REQUESTED"
+        : "SUCCEEDED";
+    const tlmRequest: ProviderRequestState =
+      this.mode === "LIVE_READ_ONLY" ? this.liveTlm.getProviderHealth().requestState : "SUCCEEDED";
+    return deriveAdvisories({
+      mode: this.mode,
       orbit: this.getOrbitState(),
+      orbitRequest,
       telemetry: this.getTelemetry(),
+      tlmRequest,
       health: this.getProviderHealth(),
     });
-    this.ackedAdvisoryIds = reconcileAcks(this.ackedAdvisoryIds, advisories.map((a) => a.id));
+  }
+
+  /** Read-only: does not mutate ack state (reconciliation happens in tick()). */
+  getAdvisories(): { active: Advisory[]; acked: Advisory[] } {
+    const advisories = this.computeAdvisories();
     const active = advisories.filter((a) => !this.ackedAdvisoryIds.has(a.id));
     const acked = advisories.filter((a) => this.ackedAdvisoryIds.has(a.id));
     return { active, acked };
   }
 
   ackAdvisory(id: string): void {
+    const currentIds = new Set(this.computeAdvisories().map((a) => a.id));
+    if (!currentIds.has(id)) return;
     this.ackedAdvisoryIds.add(id);
     this.logEvent("INFO", "ADVSY", "advisory acknowledged: " + id);
     this.notify();
@@ -280,24 +316,46 @@ export class MissionStore {
   /**
    * LIVE_READ_ONLY / REPLAY: create a rehearsal entry ONLY.
    * No network, no RF, no uplink — see domain/commandRehearsal.ts.
+   * SIMULATED mode does not use rehearsal — it has its own virtual
+   * simulator console (sendSimCommand), a completely separate code path.
    */
-  createRehearsal(name: string, param: string | null): CommandRehearsal {
+  createRehearsal(name: string, param: string | null): CommandRehearsal | null {
+    if (this.mode === "SIMULATED") {
+      this.logEvent(
+        "WARN",
+        "RHRSL",
+        "rehearsal rejected — SIMULATED mode uses the virtual simulator console, not command rehearsal"
+      );
+      return null;
+    }
+    const mode: RehearsalMode = this.mode;
+    const wallNow = new Date();
+    const contextNow = this.displayNow;
     const { rehearsal, logMessage } = createCommandRehearsal(
       ++this.rehearsalSeq,
       name,
       param,
-      this.mode,
-      new Date()
+      mode,
+      wallNow,
+      contextNow
     );
+    assertNotTransmitted(rehearsal);
     this.rehearsalRolls.set(rehearsal.id, Math.random());
-    this.rehearsals.unshift(rehearsal);
-    if (this.rehearsals.length > 50) {
-      const dropped = this.rehearsals.pop();
+    const history = this.rehearsalHistories[mode];
+    history.unshift(rehearsal);
+    if (history.length > 50) {
+      const dropped = history.pop();
       if (dropped) this.rehearsalRolls.delete(dropped.id);
     }
     this.logEvent("INFO", "RHRSL", "rehearsal command created — " + logMessage);
     this.notify();
     return rehearsal;
+  }
+
+  /** Rehearsal history for the CURRENT mode only (empty in SIMULATED). */
+  getRehearsals(): readonly CommandRehearsal[] {
+    if (this.mode === "SIMULATED") return Object.freeze([]);
+    return Object.freeze([...this.rehearsalHistories[this.mode]]);
   }
 
   /* ---------- replay controls ---------- */
